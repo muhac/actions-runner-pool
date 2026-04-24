@@ -158,98 +158,40 @@ We don't `Wait()` synchronously — `--rm` will clean the container on exit, and
 
 This is the hot path. Everything between "GitHub fires `workflow_job: queued`" and "a container is executing the job."
 
-```text
-GitHub                gharp (webhook handler)        gharp (worker)             Docker / GitHub
-   │                          │                            │                           │
- 1.│ POST /github/webhook     │                            │                           │
-   │  X-Hub-Signature-256     │                            │                           │
-   │  X-GitHub-Event: workflow_job                         │                           │
-   │  body: { action: "queued", workflow_job: {...} }      │                           │
-   │ ────────────────────────►│                            │                           │
-   │                          │                            │                           │
-   │                       2. │ verify HMAC over RAW body  │                           │
-   │                          │   (constant-time compare)  │                           │
-   │                          │                            │                           │
-   │                       3. │ parse payload              │                           │
-   │                          │ filter: only handle        │                           │
-   │                          │   action == "queued"       │                           │
-   │                          │   AND labels match config  │                           │
-   │                          │   (e.g. self-hosted)       │                           │
-   │                          │                            │                           │
-   │                       4. │ INSERT INTO jobs           │                           │
-   │                          │   (job_id, repo, labels,   │                           │
-   │                          │    dedupe_key,             │                           │
-   │                          │    status='pending', ...)  │                           │
-   │                          │ ON CONFLICT DO NOTHING     │                           │
-   │                          │   (dedupe by job_id)       │                           │
-   │                          │                            │                           │
-   │                       5. │ jobCh <- jobID  (non-blocking, drop if full)           │
-   │                          │                            │                           │
-   │ ◄─────────────────────── │ 200 OK                     │                           │
-   │   (must be < ~3s typical, < 10s hard)                 │                           │
-   │                                                       │                           │
-   │                                                    6. │ jobID := <-jobCh          │
-   │                                                       │                           │
-   │                                                    7. │ check concurrency:        │
-   │                                                       │   active_runners < MAX ?  │
-   │                                                       │   if not: requeue + sleep │
-   │                                                       │                           │
-   │                                                    8. │ load installation_id      │
-   │                                                       │   for repo from sqlite    │
-   │                                                       │                           │
-   │                                                    9. │ mint App JWT (signed      │
-   │                                                       │   with App private key,   │
-   │                                                       │   exp = now+10m)          │
-   │                                                       │                           │
-   │                                                   10. │ POST /app/installations/{id}/access_tokens
-   │                                                       │ ─────────────────────────►│
-   │                                                       │ ◄─────────────────────────│
-   │                                                       │   installation_token      │
-   │                                                       │   (~1h TTL)               │
-   │                                                       │                           │
-   │                                                   11. │ POST /repos/{owner}/{repo}/actions/runners/registration-token
-   │                                                       │   Authorization: token <installation_token>
-   │                                                       │ ─────────────────────────►│
-   │                                                       │ ◄─────────────────────────│
-   │                                                       │   registration_token      │
-   │                                                       │   (~1h TTL, single-use    │
-   │                                                       │    when EPHEMERAL=1)      │
-   │                                                       │                           │
-   │                                                   12. │ INSERT INTO runners       │
-   │                                                       │   (container_name, repo,  │
-   │                                                       │    runner_name, labels,   │
-   │                                                       │    status='starting')     │
-   │                                                       │                           │
-   │                                                   13. │ docker run --rm           │
-   │                                                       │   -e REPO_URL=...         │
-   │                                                       │   -e RUNNER_TOKEN=<reg>   │
-   │                                                       │   -e RUNNER_NAME=...      │
-   │                                                       │   -e LABELS=self-hosted,ephemeral,...
-   │                                                       │   -e EPHEMERAL=1          │
-   │                                                       │   --name <container_name> │
-   │                                                       │   myoung34/github-runner  │
-   │                                                       │ ─────────────────────────►│
-   │                                                       │                           │
-   │                                                       │   container starts,       │
-   │                                                       │   registers itself with   │
-   │                                                       │   GitHub, becomes "idle"  │
-   │                                                       │                           │
-   │                                                       │   GitHub assigns the      │
-   │                                                       │   queued job to this      │
-   │                                                       │   matching runner         │
-   │                                                       │                           │
-   │                                                       │   job runs to completion  │
-   │                                                       │                           │
-   │                                                       │   container exits 0       │
-   │                                                       │   (--rm removes it)       │
-   │                                                       │                           │
-   │ POST /github/webhook                                                              │
-   │   action: "completed", conclusion: success/failure                                │
-   │ ────────────────────────►│                                                        │
-   │                       14.│ UPDATE jobs SET status='completed' ...                 │
-   │                          │ UPDATE runners SET status='finished', finished_at=...  │
-   │                          │ (no new container — completion is bookkeeping only)    │
-   │ ◄─────────────────────── │ 200 OK                                                 │
+```mermaid
+sequenceDiagram
+    participant GH as GitHub
+    participant WH as gharp (webhook handler)
+    participant WK as gharp (worker)
+    participant DK as Docker / GitHub API
+
+  GH->>WH: 1) POST /github/webhook (workflow_job queued)
+    Note over WH: 2) Verify HMAC over raw body (constant-time compare)
+  Note over WH: 3) Parse payload and filter queued jobs with matching labels
+  Note over WH: 4) Insert job row with dedupe on job id
+  Note over WH: 5) Push job id to channel when possible
+  WH-->>GH: 200 OK (target: under ~3s typical, under 10s hard)
+
+    Note over WK: 6) Worker reads a job id from channel
+    Note over WK: 7) Check concurrency and requeue when above max
+    Note over WK: 8) Load installation_id for repo from sqlite
+    Note over WK: 9) Mint App JWT (exp = now + 10m)
+
+    WK->>DK: 10) POST /app/installations/{id}/access_tokens
+    DK-->>WK: installation_token (~1h TTL)
+
+    WK->>DK: 11) POST /repos/{owner}/{repo}/actions/runners/registration-token
+    DK-->>WK: registration_token (~1h TTL, single-use with EPHEMERAL=1)
+
+    Note over WK: 12) Insert runner row with starting status
+    WK->>DK: 13) Start runner container with repo token name labels and ephemeral mode
+    Note over DK: Container starts and registers as idle runner
+    Note over DK: GitHub assigns matching queued job
+    Note over DK: Job completes then container exits and Docker removes the container
+
+    GH->>WH: POST /github/webhook (workflow_job completed)
+    Note over WH: 14) Update jobs and runners as completed for bookkeeping
+    WH-->>GH: 200 OK
 ```
 
 #### Critical invariants
@@ -338,45 +280,31 @@ Each `gharp` deployment is a separate self-hosted instance with its own public U
 
 #### The five-step dance
 
-```text
-user browser            gharp                          GitHub
-    │                     │                              │
- 1. │ GET /setup          │                              │
-    │ ───────────────────►│                              │
-    │                     │ render setup.html with       │
-    │                     │ pre-filled manifest JSON +   │
-    │                     │ random `state` cookie        │
-    │ ◄─────────────────  │                              │
-    │                                                    │
- 2. │ POST github.com/settings/apps/new?state=…          │
-    │ form: manifest=<JSON>                              │
-    │ ──────────────────────────────────────────────────►│
-    │ ◄─────────────────────────────────────────────  GitHub renders
-    │                                                 confirmation page
-    │                                                                 │
- 3. │ user clicks "Create GitHub App"                                  │
-    │ ────────────────────────────────────────────────────────────────►│
-    │                                                                  │
-    │   GitHub creates App, redirects to manifest's `redirect_url`     │
-    │                                                                  │
- 4. │ GET /github/app/callback?code=<temp>&state=…                     │
-    │ ◄─────────────────────────────────────────────────────────────── │
-    │                     │ verify state                               │
-    │                     │                                            │
-    │                     │ POST /app-manifests/<code>/conversions     │
-    │                     │ ──────────────────────────────────────────►│
-    │                     │ ◄────────────────────────────────────────  │
-    │                     │ { id, slug, webhook_secret,                │
-    │                     │   pem (private key), client_id, ... }      │
-    │                     │                                            │
-    │                     │ persist into app_config (sqlite)           │
-    │                     │                                            │
-    │ render setup_done.html with "Install" link                       │
-    │ ◄─────────────────  │                                            │
-    │                                                                  │
- 5. │ user clicks "Install" → standard App installation flow           │
-    │   GitHub later POSTs `installation: created` to /github/webhook  │
-    │   gharp inserts a row into installations table                   │
+```mermaid
+sequenceDiagram
+    participant U as User Browser
+    participant G as gharp
+    participant H as GitHub
+
+    U->>G: 1) GET /setup
+    G-->>U: Render setup.html\n(pre-filled manifest JSON + random state cookie)
+
+    U->>H: 2) POST /settings/apps/new?state=...\nform: manifest=<JSON>
+    H-->>U: Render confirmation page
+
+    U->>H: 3) Click "Create GitHub App"
+    H-->>U: Redirect to manifest redirect_url
+
+    U->>G: 4) GET /github/app/callback?code=<temp>&state=...
+    Note over G: Verify state
+    G->>H: POST /app-manifests/<code>/conversions
+    H-->>G: { id, slug, webhook_secret, pem, client_id, ... }
+    Note over G: Persist to app_config (sqlite)
+    G-->>U: Render setup_done.html with "Install" link
+
+    U->>H: 5) Click "Install" (standard App install flow)
+    H->>G: POST /github/webhook\ninstallation: created
+    Note over G: Insert row into installations table
 ```
 
 #### The manifest
