@@ -1,4 +1,4 @@
-name: Build & Test
+name: CI
 
 on:
   push:
@@ -6,7 +6,24 @@ on:
   pull_request:
 
 jobs:
-  build-test:
+  lint:
+    name: Lint
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test:
+    name: Build & Test
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
@@ -24,3 +41,33 @@ jobs:
 
       - name: go test
         run: go test -race ./...
+
+  smoke:
+    name: Smoke Test
+    runs-on: [self-hosted]
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: build binary
+        run: go build -o gharp ./cmd/gharp
+
+      - name: boot and health check
+        run: |
+          ./gharp &
+          PID=$!
+          for i in $(seq 1 10); do
+            sleep $i
+            if curl -sf http://localhost:8080/healthz; then
+              kill $PID
+              exit 0
+            fi
+          done
+          kill $PID
+          echo "health check timed out"
+          exit 1
