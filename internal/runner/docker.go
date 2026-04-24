@@ -46,7 +46,13 @@ func (l *Launcher) Launch(ctx context.Context, spec Spec) error {
 		args[i] = rendered
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := cmd.Process.Release(); err != nil {
+		return fmt.Errorf("release process for %q: %w", args[0], err)
+	}
+	return nil
 }
 
 func renderArg(raw string, spec Spec) (string, error) {
