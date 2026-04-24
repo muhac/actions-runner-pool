@@ -59,15 +59,14 @@ jobs:
 
       - name: boot and health check
         run: |
-          ./gharp &
-          PID=$!
+          BASE_URL=http://127.0.0.1:8080 ./gharp &
+
           for i in $(seq 1 10); do
             sleep $i
             if curl -sf http://localhost:8080/healthz; then
-              kill $PID
               exit 0
             fi
           done
-          kill $PID
+
           echo "health check timed out"
           exit 1
