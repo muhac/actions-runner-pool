@@ -6,5 +6,5 @@ import (
 )
 
 func Health(w http.ResponseWriter, r *http.Request) {
-	io.WriteString(w, "ok\n")
+	_, _ = io.WriteString(w, "ok\n")
 }

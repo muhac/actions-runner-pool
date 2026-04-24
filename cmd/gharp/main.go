@@ -38,7 +38,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Error("failed to close store", "err", err)
+		}
+	}()
 
 	gh := github.NewClient(cfg)
 	rn := runner.NewLauncher(cfg)
