@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 
@@ -18,7 +17,16 @@ type SetupHandler struct {
 // GET /setup — render the manifest creation form (or "already configured" page).
 // TODO: render web/templates/setup.html with manifest JSON + state cookie.
 func (h *SetupHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if existing, _ := h.Store.GetAppConfig(context.Background()); existing != nil {
+	existing, err := h.Store.GetAppConfig(r.Context())
+	if err != nil {
+		if h.Log != nil {
+			h.Log.Error("failed to load app config", "error", err)
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if existing != nil {
 		http.Error(w, "already configured", http.StatusConflict)
 		return
 	}
