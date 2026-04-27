@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   image:
-    name: Build${{ github.event_name == 'pull_request' && '' || ' & Push' }} Image
+    name: ${{ github.event_name == 'pull_request' && 'Build Image' || 'Build & Push Image' }}
     runs-on: [self-hosted]
     permissions:
       contents: read
