@@ -234,6 +234,18 @@ func TestLoad_GitHubAPIBaseInvalid(t *testing.T) {
 	}
 }
 
+func TestLoad_BaseURLTrailingSlashStripped(t *testing.T) {
+	withEnv(t, map[string]string{"BASE_URL": "https://example.test/"}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.BaseURL != "https://example.test" {
+			t.Errorf("BaseURL = %q, want trailing slash stripped", c.BaseURL)
+		}
+	})
+}
+
 func TestLoad_RunnerLabels(t *testing.T) {
 	cases := []struct {
 		name string

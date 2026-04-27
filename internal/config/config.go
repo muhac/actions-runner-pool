@@ -46,7 +46,7 @@ var requiredPlaceholders = []string{
 func Load() (*Config, error) {
 	c := &Config{
 		Port:                 envOr("PORT", "8080"),
-		BaseURL:              os.Getenv("BASE_URL"),
+		BaseURL:              strings.TrimRight(os.Getenv("BASE_URL"), "/"),
 		StoreDSN:             envOr("STORE_DSN", "file:gharp.db?_pragma=journal_mode(WAL)"),
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
