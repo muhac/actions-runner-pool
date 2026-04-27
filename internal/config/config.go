@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -55,6 +56,10 @@ func Load() (*Config, error) {
 
 	if c.BaseURL == "" {
 		return nil, errors.New("BASE_URL is required (must be reachable from GitHub)")
+	}
+
+	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("GITHUB_API_BASE must be an absolute URL with scheme and host, got %q", c.GitHubAPIBase)
 	}
 
 	cmd, err := loadRunnerCommand()

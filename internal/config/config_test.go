@@ -215,6 +215,25 @@ func TestLoad_GitHubAPIBase(t *testing.T) {
 	}
 }
 
+func TestLoad_GitHubAPIBaseInvalid(t *testing.T) {
+	for _, in := range []string{"/", "not a url", "no-scheme.example.com"} {
+		t.Run(in, func(t *testing.T) {
+			withEnv(t, map[string]string{
+				"BASE_URL":        "https://example.test",
+				"GITHUB_API_BASE": in,
+			}, func() {
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected error for %q", in)
+				}
+				if !strings.Contains(err.Error(), "GITHUB_API_BASE") {
+					t.Errorf("error should mention GITHUB_API_BASE, got: %v", err)
+				}
+			})
+		})
+	}
+}
+
 // helper: serialize a []string as JSON without bringing in a dep.
 func jsonStringArray(t *testing.T, parts []string) string {
 	t.Helper()
