@@ -84,7 +84,8 @@ is wrong):
 | Method | Purpose |
 |---|---|
 | `SaveAppConfig` / `GetAppConfig` | App credentials (singleton row) |
-| `UpsertInstallation` / `ListInstallations` / `InstallationForRepo` | Per-installation rows |
+| `UpsertInstallation` / `ListInstallations` | Per-installation rows |
+| `UpsertRepoInstallation(repo, installationID)` / `RemoveRepoInstallation(repo)` / `InstallationForRepo(repo)` | Repo↔installation mapping |
 | `InsertJobIfNew(j) (inserted bool, err error)` | Dedupe guard via `INSERT OR IGNORE` |
 | `GetJob`, `MarkJobInProgress`, `MarkJobCompleted`, `PendingJobs` | Job state machine |
 | `InsertRunner` / `UpdateRunnerStatus` / `ActiveRunnerCount` / `ListActiveRunners` | Runner lifecycle |
@@ -127,6 +128,18 @@ CREATE TABLE IF NOT EXISTS installations (
   created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Repo↔installation mapping. Populated from `installation` (created) and
+-- `installation_repositories` (added/removed) webhook events; also from the
+-- top-level `installation.id` field on `workflow_job` payloads as a lazy
+-- fallback (so a missed installation event never permanently strands a repo).
+CREATE TABLE IF NOT EXISTS installation_repos (
+  repo            TEXT    PRIMARY KEY,           -- "owner/repo"
+  installation_id INTEGER NOT NULL,
+  added_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (installation_id) REFERENCES installations(id)
+);
+CREATE INDEX IF NOT EXISTS idx_installation_repos_inst ON installation_repos(installation_id);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id           INTEGER PRIMARY KEY,
   repo         TEXT    NOT NULL,
@@ -159,7 +172,7 @@ joins on container name (to `docker inspect`) and runner name (to GitHub
 `/runners`). Backfilling later is impossible.
 
 **Test plan (`schema_test.go`):**
-- Open in-memory DSN (`file::memory:?cache=shared`), assert 4 tables exist via `sqlite_master`.
+- Open in-memory DSN (`file::memory:?cache=shared`), assert all 5 tables exist via `sqlite_master`.
 - Re-`OpenSQLite` against the same DSN — schema apply is idempotent (no `table already exists`).
 - **Done when:** schema is byte-for-byte identical across two opens.
 
@@ -178,6 +191,8 @@ Implementation notes:
 |---|---|---|
 | `TestSaveAndGetAppConfig` | call `SaveAppConfig(cfg)` | `GetAppConfig` returns equal struct |
 | `TestUpsertInstallation_Idempotent` | upsert same row twice | `ListInstallations` length == 1 |
+| `TestUpsertRepoInstallation_OverwritesOnReinstall` | upsert `repo→inst1`, then `repo→inst2` | `InstallationForRepo("repo")` returns inst2 |
+| `TestRemoveRepoInstallation` | upsert then remove | `InstallationForRepo` returns nil |
 | `TestInsertJobIfNew_DupReturnsFalse` | insert same dedupe_key twice | first `inserted=true`, second `inserted=false`, no error |
 | `TestMarkJobInProgressThenCompleted` | insert job, mark in_progress, mark completed | `GetJob` reflects status, runner_id, runner_name, conclusion |
 | `TestPendingJobs_Order` | insert 3 jobs with different `received_at` | returned in `received_at ASC` |
@@ -309,9 +324,11 @@ Order (cannot reorder):
 
    | Event | Action |
    |---|---|
-   | `installation` (`created` / `deleted`) | Upsert / no-op respectively |
-   | `installation_repositories` (`added` / `removed`) | v1: log only |
-   | `workflow_job` | See §3.3.1 |
+   | `installation` (`created`) | `UpsertInstallation`; `UpsertRepoInstallation` for every repo in `repositories` |
+   | `installation` (`deleted`) | (v1) log only; entries become stale but `workflow_job` lazy-write below will not refresh them, and the registration-token call will 404 — surfaced via worker logs |
+   | `installation_repositories` (`added`) | `UpsertRepoInstallation` for each repo in `repositories_added` |
+   | `installation_repositories` (`removed`) | `RemoveRepoInstallation` for each repo in `repositories_removed` |
+   | `workflow_job` | See §3.3.1. Also: lazy-write `UpsertRepoInstallation(repo, payload.installation.id)` so a missed installation event never strands the repo. |
    | anything else | 200, no-op |
 
 ##### 3.3.1 `workflow_job` handling

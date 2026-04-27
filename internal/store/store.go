@@ -8,6 +8,9 @@ type Store interface {
 
 	UpsertInstallation(ctx context.Context, inst *Installation) error
 	ListInstallations(ctx context.Context) ([]*Installation, error)
+
+	UpsertRepoInstallation(ctx context.Context, repoFullName string, installationID int64) error
+	RemoveRepoInstallation(ctx context.Context, repoFullName string) error
 	InstallationForRepo(ctx context.Context, repoFullName string) (*Installation, error)
 
 	InsertJobIfNew(ctx context.Context, j *Job) (inserted bool, err error)

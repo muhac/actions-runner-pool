@@ -25,6 +25,12 @@ func (s *SQLite) UpsertInstallation(ctx context.Context, inst *Installation) err
 func (s *SQLite) ListInstallations(ctx context.Context) ([]*Installation, error) {
 	return nil, errNotImplemented
 }
+func (s *SQLite) UpsertRepoInstallation(ctx context.Context, repoFullName string, installationID int64) error {
+	return errNotImplemented
+}
+func (s *SQLite) RemoveRepoInstallation(ctx context.Context, repoFullName string) error {
+	return errNotImplemented
+}
 func (s *SQLite) InstallationForRepo(ctx context.Context, repoFullName string) (*Installation, error) {
 	return nil, errNotImplemented
 }
