@@ -74,3 +74,33 @@ func TestRegistrationToken_Non2xxIsError(t *testing.T) {
 		t.Fatalf("want 403 in error, got %v", err)
 	}
 }
+
+func TestRegistrationToken_RejectsBadRepoFullName(t *testing.T) {
+	c := newTestClient(t, "https://example.test")
+	for _, in := range []string{"", "no-slash", "/missing-owner", "missing-repo/", "a/b/c", "../etc/passwd"} {
+		t.Run(in, func(t *testing.T) {
+			_, err := c.RegistrationToken(context.Background(), "tok", in)
+			if err == nil {
+				t.Fatalf("expected validation error for %q", in)
+			}
+		})
+	}
+}
+
+func TestRegistrationToken_EscapesSegments(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`{"token":"x"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+	// Owner with a space (valid GitHub username characters are limited but we
+	// still want to assert escaping happens; "a b" exercises the encoder).
+	if _, err := c.RegistrationToken(context.Background(), "tok", "a b/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotPath, "a%20b") {
+		t.Errorf("expected escaped owner segment in path, got %q", gotPath)
+	}
+}

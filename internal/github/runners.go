@@ -6,15 +6,32 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 )
+
+// splitRepoFullName parses "owner/repo" and returns each segment.
+// Rejects empty, missing slash, multiple slashes, and empty segments.
+func splitRepoFullName(repoFullName string) (owner, repo string, err error) {
+	parts := strings.Split(repoFullName, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("repoFullName must be \"owner/repo\", got %q", repoFullName)
+	}
+	return parts[0], parts[1], nil
+}
 
 // RegistrationToken mints a single-use runner registration token for a repo.
 // POST /repos/{owner}/{repo}/actions/runners/registration-token.
 //
 // Tokens are single-use under EPHEMERAL=1; never cache.
 func (c *Client) RegistrationToken(ctx context.Context, installationToken, repoFullName string) (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/runners/registration-token", c.cfg.GitHubAPIBase, repoFullName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	owner, repo, err := splitRepoFullName(repoFullName)
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runners/registration-token",
+		c.cfg.GitHubAPIBase, url.PathEscape(owner), url.PathEscape(repo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
