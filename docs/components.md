@@ -4,26 +4,26 @@
 > architecture doc says *what* and *why*; this doc says *in what order*, *with
 > which signatures*, and *how to verify each component before moving on*.
 
-## Status snapshot (post Phase 2)
+## Status snapshot (post Phase 3)
 
 | Package | File | State | Notes |
 |---|---|---|---|
-| `cmd/gharp` | `main.go` | ✅ | Wiring only. No business logic. |
-| `internal/config` | `config.go` (+test) | ✅ | Env loading, template placeholder validation, `GITHUB_API_BASE`. |
+| `cmd/gharp` | `main.go` (+smoke) | ✅ | Wiring + boot smoke test under `-tags smoke`. |
+| `internal/config` | `config.go` (+test) | ✅ | Env loading, `GITHUB_API_BASE`, `RUNNER_LABELS`. |
 | `internal/runner` | `docker.go` (+test) | ✅ | Template render → `exec.Command(...).Start()`. |
 | `internal/store` | `models.go`, `store.go` | ✅ | Phase 0 interface + Phase 1 schema landed. |
-| `internal/store` | `sqlite.go` (+tests, schema.sql) | ✅ | modernc.org/sqlite + 11 per-method tests. |
-| `internal/github` | `client.go` | ✅ | `http.Client` wrapper. |
+| `internal/store` | `sqlite.go` (+tests, schema.sql) | ✅ | modernc.org/sqlite + per-method tests. |
+| `internal/github` | `client.go` | ✅ | `http.Client` wrapper + per-Client token cache. |
 | `internal/github` | `manifest.go` (+test) | ✅ | `BuildManifest` + `ConvertCode`. |
 | `internal/github` | `auth.go` (+test) | ✅ | `AppJWT` (RS256) + `InstallationToken` with TTL cache. |
 | `internal/github` | `runners.go` (+test) | ✅ | `RegistrationToken`. List/Delete remain v1.1 stubs. |
 | `internal/scheduler` | `types.go` | ✅ | `WorkflowJobEvent` payload. |
-| `internal/scheduler` | `scheduler.go` | 🔧 | `New` / `Enqueue` ✅, `Run` is a TODO loop. |
+| `internal/scheduler` | `scheduler.go` | 🔧 | `New` / `Enqueue` ✅, `Run` is a TODO loop (Phase 4). |
 | `internal/httpapi` | `router.go` | ✅ | `ServeMux` wiring. |
 | `internal/httpapi/handlers` | `health.go` | ✅ | `GET /healthz` → 200. |
-| `internal/httpapi/handlers` | `setup.go` | ❌ | 501. |
-| `internal/httpapi/handlers` | `callback.go` | ❌ | 501. |
-| `internal/httpapi/handlers` | `webhook.go` | ❌ | 501. |
+| `internal/httpapi/handlers` | `setup.go` (+test) | ✅ | manifest form + state cookie + setup_done. |
+| `internal/httpapi/handlers` | `callback.go` (+test) | ✅ | state verify + ConvertCode + SaveAppConfig. |
+| `internal/httpapi/handlers` | `webhook.go` (+test) | ✅ | HMAC + label filter + installation/workflow_job dispatch. |
 
 Legend: ✅ done + tested · 🔧 partial · ❌ stub.
 
