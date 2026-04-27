@@ -81,3 +81,23 @@ func TestConvertCode_404Surfaces(t *testing.T) {
 		t.Fatalf("want 404 surfaced in error, got %v", err)
 	}
 }
+
+func TestConvertCode_EscapesCode(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`{"id":1,"slug":"x","webhook_secret":"s","pem":"p","client_id":"i","client_secret":"sc"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+
+	// A pathologically-shaped code with a slash and reserved chars.
+	if _, err := c.ConvertCode(context.Background(), "../etc/passwd?evil"); err != nil {
+		t.Fatal(err)
+	}
+	// '/' becomes %2F, '?' becomes %3F — confirms the segment did not split
+	// or terminate the path early.
+	if !strings.Contains(gotPath, "%2F") || !strings.Contains(gotPath, "%3F") {
+		t.Errorf("expected escaped code in path, got %q", gotPath)
+	}
+}

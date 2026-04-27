@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 type Manifest struct {
@@ -50,8 +51,8 @@ func BuildManifest(baseURL string) Manifest {
 // The single-use code IS the credential; no auth header is sent. Code expires
 // in ~10 min so callers must invoke immediately and not retry.
 func (c *Client) ConvertCode(ctx context.Context, code string) (*AppCredentials, error) {
-	url := fmt.Sprintf("%s/app-manifests/%s/conversions", c.cfg.GitHubAPIBase, code)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	endpoint := fmt.Sprintf("%s/app-manifests/%s/conversions", c.cfg.GitHubAPIBase, url.PathEscape(code))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
