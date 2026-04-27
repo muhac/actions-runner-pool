@@ -1,4 +1,4 @@
-# 🚀 actions-runner-pool
+# 🪉 gharp — GitHub Actions Runner Pool
 
 **Ephemeral autoscaling GitHub Actions runners for multiple repositories and personal accounts (Docker-based, no Kubernetes).**
 
