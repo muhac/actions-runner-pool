@@ -27,7 +27,6 @@ type fakeStore struct {
 	removedRepoInstallation  []string
 	insertedJobs             []*store.Job
 	insertJobErr             error
-	insertJobAlreadyExists   bool // when true, second call returns inserted=false
 	markedInProgress         []markedInProgress
 	markedCompleted          []markedCompleted
 	updatedRunnerByName      []runnerStatusUpdate
