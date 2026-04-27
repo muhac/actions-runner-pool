@@ -20,6 +20,33 @@ type fakeStore struct {
 	getErr      error
 	saveErr     error
 	saved       *store.AppConfig
+
+	// Webhook-side state.
+	upsertedInstallations    []*store.Installation
+	upsertedRepoInstallation map[string]int64
+	removedRepoInstallation  []string
+	insertedJobs             []*store.Job
+	insertJobErr             error
+	insertJobAlreadyExists   bool // when true, second call returns inserted=false
+	markedInProgress         []markedInProgress
+	markedCompleted          []markedCompleted
+	updatedRunnerByName      []runnerStatusUpdate
+}
+
+type markedInProgress struct {
+	jobID      int64
+	runnerID   int64
+	runnerName string
+}
+
+type markedCompleted struct {
+	jobID      int64
+	conclusion string
+}
+
+type runnerStatusUpdate struct {
+	runnerName string
+	status     string
 }
 
 func (f *fakeStore) GetAppConfig(_ context.Context) (*store.AppConfig, error) {
@@ -35,6 +62,52 @@ func (f *fakeStore) SaveAppConfig(_ context.Context, c *store.AppConfig) error {
 	}
 	f.saved = c
 	f.appConfig = c
+	return nil
+}
+
+func (f *fakeStore) UpsertInstallation(_ context.Context, inst *store.Installation) error {
+	f.upsertedInstallations = append(f.upsertedInstallations, inst)
+	return nil
+}
+
+func (f *fakeStore) UpsertRepoInstallation(_ context.Context, repo string, instID int64) error {
+	if f.upsertedRepoInstallation == nil {
+		f.upsertedRepoInstallation = map[string]int64{}
+	}
+	f.upsertedRepoInstallation[repo] = instID
+	return nil
+}
+
+func (f *fakeStore) RemoveRepoInstallation(_ context.Context, repo string) error {
+	f.removedRepoInstallation = append(f.removedRepoInstallation, repo)
+	return nil
+}
+
+func (f *fakeStore) InsertJobIfNew(_ context.Context, j *store.Job) (bool, error) {
+	if f.insertJobErr != nil {
+		return false, f.insertJobErr
+	}
+	for _, existing := range f.insertedJobs {
+		if existing.DedupeKey == j.DedupeKey {
+			return false, nil
+		}
+	}
+	f.insertedJobs = append(f.insertedJobs, j)
+	return true, nil
+}
+
+func (f *fakeStore) MarkJobInProgress(_ context.Context, jobID, runnerID int64, runnerName string) error {
+	f.markedInProgress = append(f.markedInProgress, markedInProgress{jobID, runnerID, runnerName})
+	return nil
+}
+
+func (f *fakeStore) MarkJobCompleted(_ context.Context, jobID int64, conclusion string) error {
+	f.markedCompleted = append(f.markedCompleted, markedCompleted{jobID, conclusion})
+	return nil
+}
+
+func (f *fakeStore) UpdateRunnerStatusByName(_ context.Context, runnerName, status string) error {
+	f.updatedRunnerByName = append(f.updatedRunnerByName, runnerStatusUpdate{runnerName, status})
 	return nil
 }
 

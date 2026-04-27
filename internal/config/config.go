@@ -17,6 +17,7 @@ type Config struct {
 	StoreDSN             string
 	RunnerImage          string
 	RunnerCommand        []string
+	RunnerLabels         []string
 	MaxConcurrentRunners int
 	DockerHost           string
 	GitHubAPIBase        string
@@ -51,6 +52,7 @@ func Load() (*Config, error) {
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
+		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),
 		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
 
@@ -107,6 +109,22 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// parseLabels splits "a,b, c" into ["a","b","c"]. Empty input → nil so the
+// webhook can detect "no filter, serve everything".
+func parseLabels(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func parseLogLevel(s string) slog.Level {
