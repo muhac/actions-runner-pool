@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestSmoke_BinaryStartsAndOpensDB(t *testing.T) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binPath)
-	cmd.Env = append(cmd.Env,
+	cmd.Env = append(os.Environ(),
 		"PORT="+port,
 		"BASE_URL=http://127.0.0.1:"+port,
 		"STORE_DSN=file:"+dbPath,
