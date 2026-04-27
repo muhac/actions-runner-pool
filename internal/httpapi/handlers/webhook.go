@@ -17,8 +17,8 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-// jobEnqueuer is the slice of *scheduler.Scheduler the webhook needs;
-// extracted so tests can pass a spy.
+// jobEnqueuer is the subset of *scheduler.Scheduler the webhook needs;
+// extracted as an interface so tests can pass a spy.
 type jobEnqueuer interface {
 	Enqueue(jobID int64)
 }
