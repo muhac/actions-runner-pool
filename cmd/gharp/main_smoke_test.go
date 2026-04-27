@@ -85,9 +85,10 @@ func freePort() (string, error) {
 }
 
 func waitForHTTP(url string, timeout time.Duration) error {
+	client := &http.Client{Timeout: 1 * time.Second}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url)
+		resp, err := client.Get(url)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
