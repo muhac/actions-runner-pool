@@ -322,11 +322,19 @@ Order (cannot reorder):
 
   | action | Steps |
   |---|---|
-  | `queued` | `inserted, _ := st.InsertJobIfNew(j)`; if `inserted`, `sch.Enqueue(j.ID)` |
-  | `in_progress` | `MarkJobInProgress(jobID, runnerID, runnerName)` + `UpdateRunnerStatus(containerName,"busy")` (best-effort) |
-  | `completed` | `MarkJobCompleted(jobID, conclusion)` + `UpdateRunnerStatus(containerName,"finished")` |
+  | `queued` | `inserted, err := st.InsertJobIfNew(j)`; on `err` return 5xx (let GitHub retry — losing a queued event silently means the job never runs); if `inserted`, `sch.Enqueue(j.ID)` |
+  | `in_progress` | `MarkJobInProgress(jobID, runnerID, runnerName)` + `UpdateRunnerStatusByName(runnerName,"busy")` (best-effort — bookkeeping only; `err` is logged but does not change response) |
+  | `completed` | `MarkJobCompleted(jobID, conclusion)` + `UpdateRunnerStatusByName(runnerName,"finished")` (same: best-effort bookkeeping) |
 
-- Always 200 on success; 401 on bad HMAC; 400 on bad body. Never 500 on transient store errors — log + 202.
+- Response code policy:
+  - 401 — HMAC mismatch.
+  - 400 — body unparseable.
+  - **5xx — store error on the `queued` path.** GitHub will retry; the
+    `INSERT OR IGNORE` dedupe guard makes retry safe. Returning 2xx here
+    permanently drops the event.
+  - 200 — everything else (including bookkeeping store errors on
+    `in_progress` / `completed`, which only affect the dashboard, not
+    correctness).
 
 **Test plan (`webhook_test.go`):** in-memory store + spy scheduler.
 | Test | Approach |
@@ -334,6 +342,7 @@ Order (cannot reorder):
 | `TestWebhook_BadSignature_401` | wrong secret → 401, no store writes |
 | `TestWebhook_GoodSignature_200` | correct HMAC → 200 |
 | `TestWebhook_QueuedDuplicate_DedupedAtStore` | deliver same `workflow_job.id` twice; assert `Enqueue` called once |
+| `TestWebhook_QueuedStoreError_Returns5xx` | `InsertJobIfNew` returns error; assert response 5xx and `Enqueue` NOT called (so GitHub retries) |
 | `TestWebhook_LabelFilter_DropsNonMatching` | runs-on=`["foo"]`, RunnerLabels=`["bar"]` → 200, no `InsertJobIfNew` |
 | `TestWebhook_LabelFilter_EmptyConfigPasses` | RunnerLabels nil → insert proceeds |
 | `TestWebhook_InProgress_BindsRunner` | assert `MarkJobInProgress` called with `runnerID`/`runnerName` from payload |
