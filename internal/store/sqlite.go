@@ -2,16 +2,38 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	_ "embed"
 	"errors"
+	"fmt"
+
+	_ "modernc.org/sqlite"
 )
 
-// SQLite is a placeholder. v1 implementation will use modernc.org/sqlite (CGO-free).
+//go:embed schema.sql
+var schemaSQL string
+
 type SQLite struct {
-	dsn string
+	db *sql.DB
 }
 
 func OpenSQLite(dsn string) (*SQLite, error) {
-	return &SQLite{dsn: dsn}, nil
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite (%s): %w", dsn, err)
+	}
+	if _, err := db.ExecContext(context.Background(), schemaSQL); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	return &SQLite{db: db}, nil
+}
+
+func (s *SQLite) Close() error {
+	if s.db == nil {
+		return nil
+	}
+	return s.db.Close()
 }
 
 var errNotImplemented = errors.New("store/sqlite: not implemented yet")
@@ -56,7 +78,5 @@ func (s *SQLite) UpdateRunnerStatus(ctx context.Context, containerName, status s
 func (s *SQLite) UpdateRunnerStatusByName(ctx context.Context, runnerName, status string) error {
 	return errNotImplemented
 }
-func (s *SQLite) ActiveRunnerCount(ctx context.Context) (int, error)        { return 0, errNotImplemented }
+func (s *SQLite) ActiveRunnerCount(ctx context.Context) (int, error)       { return 0, errNotImplemented }
 func (s *SQLite) ListActiveRunners(ctx context.Context) ([]*Runner, error) { return nil, errNotImplemented }
-
-func (s *SQLite) Close() error { return nil }
