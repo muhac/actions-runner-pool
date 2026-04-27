@@ -89,6 +89,11 @@ func (h *WebhookHandler) Post(w http.ResponseWriter, r *http.Request) {
 // ---------------- HMAC ----------------
 
 func verifySignature(secret string, body []byte, header string) bool {
+	// An empty secret would happily verify a forged HMAC. Treat it as a
+	// fatal misconfiguration — no webhook is "anyone can post".
+	if secret == "" {
+		return false
+	}
 	if !strings.HasPrefix(header, "sha256=") {
 		return false
 	}

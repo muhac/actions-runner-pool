@@ -297,3 +297,15 @@ func TestWebhook_OversizeBody_413(t *testing.T) {
 		t.Fatalf("status = %d, want 413", rr.Code)
 	}
 }
+
+func TestWebhook_EmptySecret_RejectsSignature(t *testing.T) {
+	// Misconfiguration: app_config.WebhookSecret == "". An attacker computing
+	// HMAC with an empty key would otherwise produce a "valid" signature.
+	st := &fakeStore{appConfig: &store.AppConfig{WebhookSecret: ""}}
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	body := []byte(`{}`)
+	rr := postWebhook(t, h, "ping", body, sign("", body))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (empty-secret rejection)", rr.Code)
+	}
+}
