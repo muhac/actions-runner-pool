@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,15 +30,27 @@ type WebhookHandler struct {
 	Log       *slog.Logger
 }
 
+// maxWebhookBodyBytes caps how much we'll read from a webhook request before
+// authentication. GitHub's largest documented payload is well under 1MB; this
+// is generous-but-bounded so an unauthenticated caller can't OOM us.
+const maxWebhookBodyBytes = 1 << 20 // 1 MiB
+
 // POST /github/webhook
 //
-// 200 on success, 401 on bad signature, 400 on bad body, 5xx ONLY on the
-// queued path when the store fails (so GitHub retries; the INSERT-OR-IGNORE
-// dedupe makes retry safe). Bookkeeping store errors on in_progress /
-// completed are logged and swallowed to keep GitHub from retry-storming us.
+// 200 on success, 401 on bad signature, 400 on bad body, 413 on oversize body,
+// 5xx ONLY on the queued path when the store fails (so GitHub retries; the
+// INSERT-OR-IGNORE dedupe makes retry safe). Bookkeeping store errors on
+// in_progress / completed are logged and swallowed to keep GitHub from
+// retry-storming us.
 func (h *WebhookHandler) Post(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}

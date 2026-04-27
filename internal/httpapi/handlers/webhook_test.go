@@ -286,3 +286,14 @@ func TestWebhook_BadJSON_400(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
+
+func TestWebhook_OversizeBody_413(t *testing.T) {
+	// Body just over the 1MiB cap; signature can be anything because the
+	// limit fires before HMAC verification.
+	body := bytes.Repeat([]byte("x"), maxWebhookBodyBytes+1)
+	h := newWebhookHandler(t, storeWithSecret(testWebhookSecret), &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, "sha256=whatever")
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rr.Code)
+	}
+}
