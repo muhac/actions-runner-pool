@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -39,29 +38,28 @@ type cachedInstallationToken struct {
 	exp   time.Time
 }
 
-var (
-	installationTokenCache sync.Map // installationID int64 -> cachedInstallationToken
-
-	// nowFn is overridable in tests to advance the cache clock.
-	nowFn = time.Now
-)
+// nowFn is overridable in tests to advance the cache clock.
+var nowFn = time.Now
 
 // InstallationToken returns a cached or freshly minted installation token for
 // the given installation. Cache TTL = expires_at - 5min margin.
 //
 // The caller provides a JWT (mint with AppJWT) used only on cache miss.
 func (c *Client) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error) {
-	if v, ok := installationTokenCache.Load(installationID); ok {
+	if v, ok := c.tokenCache.Load(installationID); ok {
 		ct := v.(cachedInstallationToken)
 		if nowFn().Before(ct.exp) {
 			return ct.token, nil
 		}
+		// Stale entry — drop it so the cache doesn't grow forever for
+		// installations that came and went.
+		c.tokenCache.Delete(installationID)
 	}
 	tok, exp, err := c.fetchInstallationToken(ctx, jwt, installationID)
 	if err != nil {
 		return "", err
 	}
-	installationTokenCache.Store(installationID, cachedInstallationToken{
+	c.tokenCache.Store(installationID, cachedInstallationToken{
 		token: tok,
 		exp:   exp.Add(-5 * time.Minute),
 	})
@@ -94,6 +92,12 @@ func (c *Client) fetchInstallationToken(ctx context.Context, jwt string, install
 	}
 	if body.Token == "" {
 		return "", time.Time{}, errors.New("installation token: empty token in response")
+	}
+	if body.ExpiresAt.IsZero() {
+		return "", time.Time{}, errors.New("installation token: missing expires_at in response")
+	}
+	if !body.ExpiresAt.After(nowFn()) {
+		return "", time.Time{}, errors.New("installation token: expires_at already in the past")
 	}
 	return body.Token, body.ExpiresAt, nil
 }

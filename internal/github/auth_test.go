@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,22 +83,7 @@ func newInstallationTokenServer(t *testing.T, expiresAt time.Time) (*httptest.Se
 	return srv, state
 }
 
-func resetInstallationTokenCache(t *testing.T) {
-	t.Helper()
-	installationTokenCache.Range(func(k, _ any) bool {
-		installationTokenCache.Delete(k)
-		return true
-	})
-	t.Cleanup(func() {
-		installationTokenCache.Range(func(k, _ any) bool {
-			installationTokenCache.Delete(k)
-			return true
-		})
-	})
-}
-
 func TestInstallationToken_CachesUntilExpiry(t *testing.T) {
-	resetInstallationTokenCache(t)
 	srv, state := newInstallationTokenServer(t, time.Now().Add(1*time.Hour))
 	c := newTestClient(t, srv.URL)
 
@@ -118,7 +104,6 @@ func TestInstallationToken_CachesUntilExpiry(t *testing.T) {
 }
 
 func TestInstallationToken_RefreshAfterMargin(t *testing.T) {
-	resetInstallationTokenCache(t)
 	// expires_at = now + 4 min; effective TTL = 4min - 5min margin = -1min,
 	// so the very first cached entry is already expired by our policy.
 	srv, state := newInstallationTokenServer(t, time.Now().Add(4*time.Minute))
@@ -135,8 +120,36 @@ func TestInstallationToken_RefreshAfterMargin(t *testing.T) {
 	}
 }
 
+func TestInstallationToken_DropsStaleEntry(t *testing.T) {
+	// First call populates cache; advance the clock past the cache margin
+	// and confirm the next call refetches (cache miss + new server hit).
+	srv, state := newInstallationTokenServer(t, time.Now().Add(1*time.Hour))
+	c := newTestClient(t, srv.URL)
+
+	if _, err := c.InstallationToken(context.Background(), "fake-jwt", 11); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.tokenCache.Load(int64(11)); !ok {
+		t.Fatalf("cache entry not stored")
+	}
+
+	original := nowFn
+	// Past the 55min cache margin, but the server's hard-coded expires_at
+	// (real_now + 1h) is still strictly after our advanced clock by ~4min,
+	// so the validation passes for the refetch.
+	nowFn = func() time.Time { return original().Add(56 * time.Minute) }
+	t.Cleanup(func() { nowFn = original })
+
+	hits := state.hits.Load()
+	if _, err := c.InstallationToken(context.Background(), "fake-jwt", 11); err != nil {
+		t.Fatal(err)
+	}
+	if state.hits.Load() != hits+1 {
+		t.Fatalf("expected refetch on stale entry; hits %d -> %d", hits, state.hits.Load())
+	}
+}
+
 func TestInstallationToken_Non2xxIsError(t *testing.T) {
-	resetInstallationTokenCache(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -144,5 +157,32 @@ func TestInstallationToken_Non2xxIsError(t *testing.T) {
 	c := newTestClient(t, srv.URL)
 	if _, err := c.InstallationToken(context.Background(), "fake-jwt", 1); err == nil {
 		t.Fatalf("expected error on 401")
+	}
+}
+
+func TestInstallationToken_RejectsMissingExpiresAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"token":"abc"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+	_, err := c.InstallationToken(context.Background(), "fake-jwt", 1)
+	if err == nil || !strings.Contains(err.Error(), "expires_at") {
+		t.Fatalf("want missing expires_at error, got %v", err)
+	}
+}
+
+func TestInstallationToken_RejectsPastExpiresAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "abc",
+			"expires_at": time.Now().Add(-1 * time.Hour),
+		})
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+	_, err := c.InstallationToken(context.Background(), "fake-jwt", 1)
+	if err == nil || !strings.Contains(err.Error(), "past") {
+		t.Fatalf("want past-expires_at error, got %v", err)
 	}
 }
