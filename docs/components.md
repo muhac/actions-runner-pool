@@ -486,14 +486,16 @@ Real ngrok URL, throwaway repo, real workflow.
 
 ## PR layout
 
-One PR per phase, each branched off `main` after the prior one merges:
-- `p-39` — this doc (current PR)
-- `p-39-phase0` — Store interface tweak + `Job.Conclusion`
-- `p-39-phase1` — sqlite.go + tests
-- `p-39-phase2` — github/{auth,manifest,runners}
-- `p-39-phase3` — handlers/{setup,callback,webhook}
-- `p-39-phase4` — scheduler.Run dispatch + replay
-- `p-39-phase5` — RUNNER_LABELS, BASE_URL drift warning, README, end-to-end smoke
+One PR per phase, each branched off `main` after the prior one merges. Branch
+names are assigned at implementation time (not pre-allocated here):
+
+- This doc lands first as a standalone PR.
+- Phase 0 — Store interface tweak + `Job.Conclusion`
+- Phase 1 — sqlite.go + tests
+- Phase 2 — github/{auth,manifest,runners}
+- Phase 3 — handlers/{setup,callback,webhook}
+- Phase 4 — scheduler.Run dispatch + replay
+- Phase 5 — RUNNER_LABELS, BASE_URL drift warning, README, end-to-end smoke
 
 ## Critical invariants (re-stated for the implementer)
 
