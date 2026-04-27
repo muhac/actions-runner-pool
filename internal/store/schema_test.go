@@ -24,7 +24,7 @@ func TestSchema_AppliesAndIdempotent(t *testing.T) {
 		}
 		got = append(got, n)
 	}
-	rows.Close()
+	_ = rows.Close()
 	want := []string{"app_config", "installation_repos", "installations", "jobs", "runners"}
 	if len(got) != len(want) {
 		t.Fatalf("tables = %v, want %v", got, want)

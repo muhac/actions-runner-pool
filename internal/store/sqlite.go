@@ -89,7 +89,7 @@ func (s *SQLite) ListInstallations(ctx context.Context) ([]*Installation, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*Installation
 	for rows.Next() {
 		var i Installation
@@ -189,7 +189,7 @@ func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*Job
 	for rows.Next() {
 		var j Job
@@ -243,7 +243,7 @@ func (s *SQLite) ListActiveRunners(ctx context.Context) ([]*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*Runner
 	for rows.Next() {
 		var r Runner
