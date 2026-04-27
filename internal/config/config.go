@@ -18,6 +18,7 @@ type Config struct {
 	RunnerCommand        []string
 	MaxConcurrentRunners int
 	DockerHost           string
+	GitHubAPIBase        string
 	LogLevel             slog.Level
 }
 
@@ -48,6 +49,7 @@ func Load() (*Config, error) {
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
+		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
 
