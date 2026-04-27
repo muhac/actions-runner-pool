@@ -164,16 +164,22 @@ func TestMarkJobInProgressThenCompleted(t *testing.T) {
 func TestPendingJobs_Order(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
-	for i, id := range []int64{3, 1, 2} {
+	// Insert in any order, then explicitly stamp distinct received_at so
+	// the test does not depend on wall-clock sleeps or sqlite's
+	// second-precision CURRENT_TIMESTAMP.
+	for _, id := range []int64{3, 1, 2} {
 		j := &Job{ID: id, Repo: "a/b", Action: "queued", Labels: "x",
 			DedupeKey: itoa(id), Status: "pending"}
 		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
 			t.Fatal(err)
 		}
-		// Ensure distinct received_at by sleeping enough to advance the
-		// CURRENT_TIMESTAMP (sqlite stores at second precision by default).
-		if i < 2 {
-			time.Sleep(1100 * time.Millisecond)
+	}
+	// received_at order: id=3 first, then id=1, then id=2.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for offset, id := range []int64{3, 1, 2} {
+		when := base.Add(time.Duration(offset) * time.Second)
+		if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET received_at=? WHERE id=?`, when, id); err != nil {
+			t.Fatal(err)
 		}
 	}
 	out, err := s.PendingJobs(ctx)
@@ -183,7 +189,6 @@ func TestPendingJobs_Order(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("len=%d", len(out))
 	}
-	// Insertion order: 3, 1, 2 — that's the received_at order we expect.
 	if out[0].ID != 3 || out[1].ID != 1 || out[2].ID != 2 {
 		t.Fatalf("order = [%d %d %d]", out[0].ID, out[1].ID, out[2].ID)
 	}
