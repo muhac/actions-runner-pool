@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,15 +20,38 @@ type SQLite struct {
 }
 
 func OpenSQLite(dsn string) (*SQLite, error) {
+	return OpenSQLiteWithContext(context.Background(), dsn)
+}
+
+func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
+	// foreign_keys is per-connection in sqlite; setting it via the DSN ensures
+	// every connection in database/sql's pool gets it (a one-shot
+	// `PRAGMA foreign_keys = ON` would only stick on a single connection).
+	dsn = ensureDSNPragma(dsn, "foreign_keys", "1")
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite (%s): %w", dsn, err)
 	}
-	if _, err := db.ExecContext(context.Background(), schemaSQL); err != nil {
+	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	return &SQLite{db: db}, nil
+}
+
+// ensureDSNPragma adds `_pragma=name(value)` to a modernc.org/sqlite DSN if
+// the named pragma is not already present.
+func ensureDSNPragma(dsn, name, value string) string {
+	q := name + "("
+	// Check if already set in any _pragma= clause.
+	if strings.Contains(dsn, "_pragma="+q) || strings.Contains(dsn, "_pragma="+url.QueryEscape(q)) {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "_pragma=" + url.QueryEscape(name+"("+value+")")
 }
 
 func (s *SQLite) Close() error {

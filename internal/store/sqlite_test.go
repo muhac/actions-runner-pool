@@ -109,6 +109,16 @@ func TestRemoveRepoInstallation(t *testing.T) {
 	}
 }
 
+func TestForeignKeysEnforced(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	// installation_id=999 has no parent row in installations.
+	err := s.UpsertRepoInstallation(ctx, "alice/repo", 999)
+	if err == nil {
+		t.Fatalf("expected FK violation, got nil")
+	}
+}
+
 func TestInsertJobIfNew_DupReturnsFalse(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
