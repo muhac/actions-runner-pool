@@ -37,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME && format('{0}/{1}', secrets.DOCKERHUB_USERNAME, vars.DOCKERHUB_IMAGE || github.event.repository.name) || format('local/{0}', github.event.repository.name) }}
+          images: ${{ secrets.DOCKERHUB_USERNAME && format('{0}/{1}', secrets.DOCKERHUB_USERNAME, secrets.DOCKERHUB_IMAGE || github.event.repository.name) || format('local/{0}', github.event.repository.name) }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
