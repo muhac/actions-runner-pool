@@ -60,3 +60,18 @@ jobs:
 
       - name: smoke test
         run: go test -tags smoke -count=1 ./cmd/gharp
+
+  integration:
+    name: Integration Test
+    runs-on: [self-hosted]
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+
+      - name: integration test
+        run: go test -tags integration -count=1 ./cmd/gharp
