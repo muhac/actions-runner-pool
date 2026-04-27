@@ -49,8 +49,11 @@ func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion s
 }
 func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) { return nil, errNotImplemented }
 
-func (s *SQLite) InsertRunner(ctx context.Context, r *Runner) error                    { return errNotImplemented }
+func (s *SQLite) InsertRunner(ctx context.Context, r *Runner) error { return errNotImplemented }
 func (s *SQLite) UpdateRunnerStatus(ctx context.Context, containerName, status string) error {
+	return errNotImplemented
+}
+func (s *SQLite) UpdateRunnerStatusByName(ctx context.Context, runnerName, status string) error {
 	return errNotImplemented
 }
 func (s *SQLite) ActiveRunnerCount(ctx context.Context) (int, error)        { return 0, errNotImplemented }

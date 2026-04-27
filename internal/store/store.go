@@ -21,6 +21,7 @@ type Store interface {
 
 	InsertRunner(ctx context.Context, r *Runner) error
 	UpdateRunnerStatus(ctx context.Context, containerName, status string) error
+	UpdateRunnerStatusByName(ctx context.Context, runnerName, status string) error
 	ActiveRunnerCount(ctx context.Context) (int, error)
 	ListActiveRunners(ctx context.Context) ([]*Runner, error)
 

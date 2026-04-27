@@ -88,7 +88,7 @@ is wrong):
 | `UpsertRepoInstallation(repo, installationID)` / `RemoveRepoInstallation(repo)` / `InstallationForRepo(repo)` | Repo↔installation mapping |
 | `InsertJobIfNew(j) (inserted bool, err error)` | Dedupe guard via `INSERT OR IGNORE` |
 | `GetJob`, `MarkJobInProgress`, `MarkJobCompleted`, `PendingJobs` | Job state machine |
-| `InsertRunner` / `UpdateRunnerStatus` / `ActiveRunnerCount` / `ListActiveRunners` | Runner lifecycle |
+| `InsertRunner` / `UpdateRunnerStatus(containerName)` / `UpdateRunnerStatusByName(runnerName)` / `ActiveRunnerCount` / `ListActiveRunners` | Runner lifecycle. Scheduler uses by-container-name (it just spawned it); webhook uses by-runner-name (the only id GitHub gives it). |
 
 **Test plan:**
 - `go build ./...` green (sqlite stub still satisfies the interface — update the stub method set in the same commit).
@@ -198,6 +198,7 @@ Implementation notes:
 | `TestPendingJobs_Order` | insert 3 jobs with different `received_at` | returned in `received_at ASC` |
 | `TestActiveRunnerCount_StatusFilter` | insert runners across all 4 statuses | count == 3 (starting/idle/busy only) |
 | `TestUpdateRunnerStatus_FinishedSetsFinishedAt` | insert runner, mark finished | `finished_at IS NOT NULL` |
+| `TestUpdateRunnerStatusByName_MatchesRunnerNameNotContainer` | insert runner with distinct container_name and runner_name; call by runner_name | row's status updated, container_name lookup also reflects it |
 
 Manual smoke: `docker compose up`, see `OpenSQLite` log line, see file created at the configured DSN path.
 
