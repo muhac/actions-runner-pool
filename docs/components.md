@@ -516,8 +516,9 @@ Real ngrok URL, throwaway repo, real workflow.
 One PR per phase, each branched off `main` after the prior one merges. Branch
 names are assigned at implementation time (not pre-allocated here):
 
-- This doc lands first as a standalone PR.
-- Phase 0 — Store interface tweak + `Job.Conclusion`
+- **This PR** — `docs/components.md` rewrite **+ Phase 0** (Store interface
+  tweak + `Job.Conclusion`). Phase 0 is bundled because it's a ~15-line
+  interface change inseparable from the doc that defines it.
 - Phase 1 — sqlite.go + tests
 - Phase 2 — github/{auth,manifest,runners}
 - Phase 3 — handlers/{setup,callback,webhook}
