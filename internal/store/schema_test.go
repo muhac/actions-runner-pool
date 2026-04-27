@@ -16,6 +16,7 @@ func TestSchema_AppliesAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query tables: %v", err)
 	}
+	defer func() { _ = rows.Close() }()
 	var got []string
 	for rows.Next() {
 		var n string
@@ -24,7 +25,9 @@ func TestSchema_AppliesAndIdempotent(t *testing.T) {
 		}
 		got = append(got, n)
 	}
-	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows iteration: %v", err)
+	}
 	want := []string{"app_config", "installation_repos", "installations", "jobs", "runners"}
 	if len(got) != len(want) {
 		t.Fatalf("tables = %v, want %v", got, want)
