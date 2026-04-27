@@ -32,7 +32,13 @@ func (s *SQLite) InstallationForRepo(ctx context.Context, repoFullName string) (
 func (s *SQLite) InsertJobIfNew(ctx context.Context, j *Job) (bool, error) {
 	return false, errNotImplemented
 }
-func (s *SQLite) UpdateJobStatus(ctx context.Context, jobID int64, status string, runnerID int64, runnerName string) error {
+func (s *SQLite) GetJob(ctx context.Context, jobID int64) (*Job, error) {
+	return nil, errNotImplemented
+}
+func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) error {
+	return errNotImplemented
+}
+func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error {
 	return errNotImplemented
 }
 func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) { return nil, errNotImplemented }

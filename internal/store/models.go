@@ -28,6 +28,7 @@ type Job struct {
 	Labels     string
 	DedupeKey  string
 	Status     string
+	Conclusion string
 	RunnerID   int64
 	RunnerName string
 	ReceivedAt time.Time
