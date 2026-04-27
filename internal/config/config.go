@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type Config struct {
 	RunnerCommand        []string
 	MaxConcurrentRunners int
 	DockerHost           string
+	GitHubAPIBase        string
 	LogLevel             slog.Level
 }
 
@@ -48,11 +50,16 @@ func Load() (*Config, error) {
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
+		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
 
 	if c.BaseURL == "" {
 		return nil, errors.New("BASE_URL is required (must be reachable from GitHub)")
+	}
+
+	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("GITHUB_API_BASE must be an absolute URL with scheme and host, got %q", c.GitHubAPIBase)
 	}
 
 	cmd, err := loadRunnerCommand()

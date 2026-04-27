@@ -186,6 +186,54 @@ func TestLoad_MaxConcurrentRunnersInvalid(t *testing.T) {
 	})
 }
 
+func TestLoad_GitHubAPIBase(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want string
+	}{
+		{"default", "", "https://api.github.com"},
+		{"override", "https://gh.example.com/api/v3", "https://gh.example.com/api/v3"},
+		{"trailing-slash-stripped", "https://gh.example.com/api/v3/", "https://gh.example.com/api/v3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"BASE_URL": "https://example.test"}
+			if tc.set != "" {
+				env["GITHUB_API_BASE"] = tc.set
+			}
+			withEnv(t, env, func() {
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if c.GitHubAPIBase != tc.want {
+					t.Errorf("GitHubAPIBase = %q, want %q", c.GitHubAPIBase, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func TestLoad_GitHubAPIBaseInvalid(t *testing.T) {
+	for _, in := range []string{"/", "not a url", "no-scheme.example.com"} {
+		t.Run(in, func(t *testing.T) {
+			withEnv(t, map[string]string{
+				"BASE_URL":        "https://example.test",
+				"GITHUB_API_BASE": in,
+			}, func() {
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected error for %q", in)
+				}
+				if !strings.Contains(err.Error(), "GITHUB_API_BASE") {
+					t.Errorf("error should mention GITHUB_API_BASE, got: %v", err)
+				}
+			})
+		})
+	}
+}
+
 // helper: serialize a []string as JSON without bringing in a dep.
 func jsonStringArray(t *testing.T, parts []string) string {
 	t.Helper()

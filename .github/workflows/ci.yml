@@ -58,19 +58,5 @@ jobs:
           go-version: stable
           cache: true
 
-      - name: build binary
-        run: go build -o gharp ./cmd/gharp
-
-      - name: boot and health check
-        run: |
-          BASE_URL=http://127.0.0.1:8080 ./gharp &
-
-          for i in $(seq 1 10); do
-            sleep $i
-            if curl -sf http://localhost:8080/healthz; then
-              exit 0
-            fi
-          done
-
-          echo "health check timed out"
-          exit 1
+      - name: smoke test
+        run: go test -tags smoke -count=1 ./cmd/gharp

@@ -4,19 +4,19 @@
 > architecture doc says *what* and *why*; this doc says *in what order*, *with
 > which signatures*, and *how to verify each component before moving on*.
 
-## Status snapshot (2026-04-27)
+## Status snapshot (post Phase 2)
 
 | Package | File | State | Notes |
 |---|---|---|---|
 | `cmd/gharp` | `main.go` | ✅ | Wiring only. No business logic. |
-| `internal/config` | `config.go` (+test) | ✅ | Env loading, template placeholder validation. |
+| `internal/config` | `config.go` (+test) | ✅ | Env loading, template placeholder validation, `GITHUB_API_BASE`. |
 | `internal/runner` | `docker.go` (+test) | ✅ | Template render → `exec.Command(...).Start()`. |
-| `internal/store` | `models.go`, `store.go` | 🔧 | Interface + structs exist; needs new methods (see Phase 0). |
-| `internal/store` | `sqlite.go` | ❌ | All methods return `errNotImplemented`. |
+| `internal/store` | `models.go`, `store.go` | ✅ | Phase 0 interface + Phase 1 schema landed. |
+| `internal/store` | `sqlite.go` (+tests, schema.sql) | ✅ | modernc.org/sqlite + 11 per-method tests. |
 | `internal/github` | `client.go` | ✅ | `http.Client` wrapper. |
-| `internal/github` | `manifest.go` | 🔧 | `BuildManifest` ✅, `ConvertCode` ❌. |
-| `internal/github` | `auth.go` | ❌ | `AppJWT`, `InstallationToken` stubs. |
-| `internal/github` | `runners.go` | ❌ | `RegistrationToken` stub; List/Delete deferred to v1.1. |
+| `internal/github` | `manifest.go` (+test) | ✅ | `BuildManifest` + `ConvertCode`. |
+| `internal/github` | `auth.go` (+test) | ✅ | `AppJWT` (RS256) + `InstallationToken` with TTL cache. |
+| `internal/github` | `runners.go` (+test) | ✅ | `RegistrationToken`. List/Delete remain v1.1 stubs. |
 | `internal/scheduler` | `types.go` | ✅ | `WorkflowJobEvent` payload. |
 | `internal/scheduler` | `scheduler.go` | 🔧 | `New` / `Enqueue` ✅, `Run` is a TODO loop. |
 | `internal/httpapi` | `router.go` | ✅ | `ServeMux` wiring. |
@@ -215,9 +215,18 @@ Manual smoke: `docker compose up`, see `OpenSQLite` log line, see file created a
 #### 2.1 `auth.go`
 
 ```go
-func (c *Client) AppJWT(ctx context.Context, st store.Store) (string, error)
-func (c *Client) InstallationToken(ctx context.Context, st store.Store, installationID int64) (string, error)
+// Mints a short-lived JWT (RS256) signed with the App private key.
+func (c *Client) AppJWT(pem []byte, appID int64) (string, error)
+
+// Returns a cached or freshly minted installation token. Caller mints the
+// AppJWT (cheap) and passes it on cache miss.
+func (c *Client) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
 ```
+
+The github package deliberately does NOT depend on `store` — that would
+violate the dependency direction declared in `architecture.md`. Callers
+(the worker / handlers) load `app_config` from the store and pass `pem` /
+`appID` / the minted JWT down.
 
 - JWT signer: `github.com/golang-jwt/jwt/v5`. RS256, `iat = now-60s`, `exp = now+10m`, `iss = app_id`.
 - Installation-token cache: `sync.Map` keyed by `int64` → `struct{token string; exp time.Time}`. TTL = `expires_at - 5min`.
@@ -253,10 +262,10 @@ func (c *Client) ConvertCode(ctx context.Context, code string) (*AppCredentials,
 #### 2.3 `runners.go::RegistrationToken`
 
 ```go
-func (c *Client) RegistrationToken(ctx context.Context, owner, repo, installToken string) (string, error)
+func (c *Client) RegistrationToken(ctx context.Context, installationToken, repoFullName string) (string, error)
 ```
 
-`POST {api}/repos/{owner}/{repo}/actions/runners/registration-token`, `Authorization: Bearer <installToken>`. Return `token` only. Never cache.
+`POST {api}/repos/{repoFullName}/actions/runners/registration-token`, `Authorization: Bearer <installationToken>`. Return `token` only. Never cache. (`repoFullName` is the `owner/repo` form callers already carry as `Job.Repo`, so we don't split it inside this package.)
 
 `ListRepoRunners` and `DeleteRepoRunner` deferred to v1.1.
 
