@@ -47,7 +47,7 @@ func run() error {
 	if existing, err := st.GetAppConfig(context.Background()); err != nil {
 		log.Warn("could not load app_config for BASE_URL drift check", "err", err)
 	} else if warn, msg := checkBaseURLDrift(existing, cfg.BaseURL); warn {
-		log.Warn(msg)
+		log.Warn("BASE_URL drift detected", "details", msg)
 	}
 
 	gh := github.NewClient(cfg)
