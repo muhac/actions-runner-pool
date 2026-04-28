@@ -25,7 +25,9 @@ docker run -d --name gharp \
   muhac/gharp:latest
 ```
 
-`BASE_URL` must be a public HTTPS URL GitHub can reach.
+`BASE_URL` must be a public HTTPS URL GitHub can reach. See
+[`docs/configuration.md`](docs/configuration.md) for the full env-var
+reference (labels, GHES base, runner image, etc.).
 
 ### 2. Create the GitHub App
 
@@ -69,15 +71,9 @@ jobs:
 Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
 (default `self-hosted`) will get a fresh runner.
 
-📖 More:
-
-- **[`docs/deploy.md`](docs/deploy.md)** — production deployment
-  (compose, Cloudflare Tunnel / ngrok / Tailscale Funnel, volumes,
-  upgrades, troubleshooting, from-source build).
-- **[`docs/configuration.md`](docs/configuration.md)** — every env
-  variable, default, and validation rule.
-- **[`docs/architecture.md`](docs/architecture.md)** — design decisions
-  and invariants.
+For production deployments (compose, Cloudflare Tunnel / ngrok /
+Tailscale Funnel, volumes, upgrades, troubleshooting, from-source
+build), see [`docs/deploy.md`](docs/deploy.md).
 
 ## 🤔 Why?
 
