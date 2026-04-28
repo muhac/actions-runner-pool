@@ -7,7 +7,7 @@
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
     code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
     button { padding: 0.6em 1.2em; font-size: 1rem; cursor: pointer; }
-    .hint { color: #666; font-size: 0.85rem; margin-top: 1.5rem; }
+    .hint { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
   </style>
 </head>
 <body>
@@ -15,13 +15,13 @@
   <p>Click below to create a GitHub App scoped to <code>{{.BaseURL}}</code>.</p>
   <p>You'll be redirected to GitHub to confirm permissions.
      After creation, GitHub will send you back here to finish bootstrap.</p>
-  <form action="https://github.com/settings/apps/new?state={{.State}}" method="post">
-    <input type="hidden" name="manifest" value="{{.ManifestJSON}}">
-    <button type="submit">Create GitHub App</button>
-  </form>
   <p class="hint">On GitHub's "Create App" page, leave the name as-is.
      Renaming changes the slug and breaks the install shortcut shown
      on the next step (gharp itself keeps working — the link just
      becomes stale).</p>
+  <form action="https://github.com/settings/apps/new?state={{.State}}" method="post">
+    <input type="hidden" name="manifest" value="{{.ManifestJSON}}">
+    <button type="submit">Create GitHub App</button>
+  </form>
 </body>
 </html>
