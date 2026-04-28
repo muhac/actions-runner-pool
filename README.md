@@ -32,12 +32,12 @@ docker run -d --name gharp \
 Open `${BASE_URL}/setup` and click **Create GitHub App**. gharp drives
 the GitHub App Manifest flow and persists the credentials locally.
 
-> ⚠️ **Don't rename the App on GitHub afterwards.** Renaming changes
-> its slug, which breaks the install link gharp renders on `/setup`
-> (built from the slug stored in `app_config`). The webhook keeps
-> working — only the install link goes stale. To fix, delete the App
-> on GitHub and re-run `/setup`.
->
+> ⚠️ **Don't rename the auto-generated App name on GitHub.**
+> gharp creates the App as `gharp-<hash>`; renaming it changes the slug,
+> which breaks the install link gharp renders on `/setup`.
+> The webhook keeps working — only the install link goes stale.
+> To fix, delete the App on GitHub and re-run `/setup`.
+
 > ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
 > and OAuth-callback URLs at `/setup` time. Changing it later won't
 > reconfigure the App — gharp will log a `BASE_URL drift` warning at
