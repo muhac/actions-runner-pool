@@ -243,6 +243,17 @@ func TestDispatch_HappyPath_InsertsStartingRunnerAndLaunches(t *testing.T) {
 	if runners[0].StartedAt.IsZero() {
 		t.Fatalf("runner row started_at is zero (year 0001) — must be set on insert")
 	}
+
+	// Job must be advanced past 'pending' so a restart's replay won't
+	// re-dispatch it. Sentinel runner_id=0 / runner_name="" since GitHub
+	// hasn't told us which runner won the binding yet.
+	job, _ := st.GetJob(context.Background(), 1)
+	if job == nil || job.Status != "in_progress" {
+		t.Fatalf("job status=%v, want in_progress (sentinel) after launch", job)
+	}
+	if job.RunnerID != 0 || job.RunnerName != "" {
+		t.Fatalf("job binding=%d/%q, want sentinels 0/\"\"", job.RunnerID, job.RunnerName)
+	}
 }
 
 func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
