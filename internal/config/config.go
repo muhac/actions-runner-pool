@@ -62,6 +62,10 @@ func Load() (*Config, error) {
 		return nil, errors.New("BASE_URL is required (must be reachable from GitHub)")
 	}
 
+	if c.MaxConcurrentRunners < 1 {
+		return nil, fmt.Errorf("MAX_CONCURRENT_RUNNERS must be >= 1, got %d", c.MaxConcurrentRunners)
+	}
+
 	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("GITHUB_API_BASE must be an absolute URL with scheme and host, got %q", c.GitHubAPIBase)
 	}

@@ -1,189 +1,127 @@
 # 🪉 gharp — GitHub Actions Runner Pool
 
-**Ephemeral autoscaling GitHub Actions runners for multiple repositories and personal accounts (Docker-based, no Kubernetes).**
-
-Run a single self-hosted runner across multiple repositories — even under a personal account — with clean, ephemeral environments for every job.
+A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 ## ✨ Features
 
+* 🔐 **Self-hosted** — no external service dependency
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
-* 🧑‍💻 **Personal account support** — no organization required
-* 📦 **Multi-repository** — share compute across repos (not supported natively by GitHub)
-* 🐳 **Docker-based** — simple, no Kubernetes required
-* 🔐 **Self-hosted** — no external service dependency
+* 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
+
+## 🚀 Quick Start
+
+### 1. Run gharp
+
+Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
+
+```bash
+docker run -d --name gharp \
+  -p 8080:8080 \
+  -e BASE_URL=https://gharp.example.com \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp/gharp:/tmp/gharp \
+  -v gharp-data:/data \
+  muhac/gharp:latest
+```
+
+`BASE_URL` must be a public HTTPS URL GitHub can reach, terminating at
+the container's port 8080 (above mapped to the host's 8080). See
+[`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
+
+### 2. Create the GitHub App
+
+Open `${BASE_URL}/setup` and click **Create GitHub App**. gharp drives
+the GitHub App Manifest flow and persists the credentials locally.
+
+> ⚠️ **Don't rename the auto-generated App name on GitHub.**
+> gharp creates the App as `gharp-<hash>`; renaming it changes the slug,
+> which breaks the install link gharp renders on `/setup`.
+> The webhook keeps working — only the install link goes stale.
+> To fix, delete the App on GitHub and re-run `/setup`.
+
+> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
+> and OAuth-callback URLs at `/setup` time. Changing it later won't
+> reconfigure the App — gharp will log a `BASE_URL drift` warning at
+> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
+> `BASE_URL` to the original value.
+
+### 3. Install the App
+
+Pick the repos (or "All repositories") you want runners for and submit.
+
+> ⚠️ **Self-hosted runners + public repos = remote code execution.**
+> GitHub [explicitly recommends against](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
+> using self-hosted runners with public repositories: any contributor
+> who can open a PR can run arbitrary code on your machine.
+> Only install the App on **private** repos you trust,
+> and run gharp on a **dedicated VM / cloud instance / homelab node**.
+
+### 4. Add a workflow
+
+```yaml
+jobs:
+  build:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "hello from $(hostname)"
+```
+
+Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
+(default `self-hosted`) will get a fresh runner.
+
+For the full deployment guide (from-source build, docker compose,
+volumes, upgrades, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
 
 ## 🤔 Why?
 
 GitHub does **not support "user-level" runners**.
 
-* Runners are scoped to:
-
-  * repository
-  * organization
-  * enterprise
+* Runners are scoped to: repository, organization, or enterprise
 
 This makes it hard to:
 
 * share a runner across multiple repositories
 * use self-hosted runners efficiently in personal accounts
-* keep environments clean between jobs
 * scale runners dynamically
 
-## 💡 This project solves that
+💡 **This project solves that**
 
 * Uses **GitHub App + webhook (`workflow_job`)**
 * Dynamically creates **ephemeral runners per job**
 * Automatically cleans up after execution
 
-👉 Result:
-
-> You get **GitHub-hosted-like behavior on your own machine**
+👉 You get **GitHub-hosted-like behavior on your own machine**
 
 ## 🏗️ Architecture
 
-```text
-GitHub → webhook → pool server → docker run → runner → job → exit
+```mermaid
+flowchart TB
+    subgraph setup["One-time setup"]
+        direction LR
+        U[User] -- POST manifest --> GH1[GitHub]
+        GH1 -- code + slug --> G1[gharp]
+        G1 -- App credentials --> DB[(sqlite)]
+        U -- install App --> GH1
+    end
+
+    subgraph runtime["Per-job runtime"]
+        direction LR
+        GH2[GitHub] -- workflow_job webhook --> G2[gharp]
+        G2 -- record job --> DB2[(sqlite)]
+        G2 -- registration token --> GH2
+        G2 -- docker run --> R[ephemeral runner]
+        R -- runs the job --> GH2
+        R -- one job, then exit --> X((removed))
+    end
+
+    setup --> runtime
 ```
 
-* GitHub sends `workflow_job` events
-* Autoscaler receives webhook
-* Starts a runner container (`EPHEMERAL=1`)
-* Runner executes job
-* Container exits and is removed
-
-## 🚀 Quick Start
-
-### 1. Clone
-
-```bash
-git clone https://github.com/<yourname>/actions-runner-pool
-cd actions-runner-pool
-```
-
-### 2. Configure
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-PORT=8080
-BASE_URL=https://your-server.example.com
-```
-
-### 3. Run
-
-```bash
-docker compose up -d
-```
-
-### 4. Open setup page
-
-```text
-http://localhost:8080/setup
-```
-
-👉 Click **"Create GitHub App"**
-
-### 5. Done
-
-* App is created
-* Webhook configured
-* Credentials stored locally
-
-## ⚙️ GitHub App Setup (What happens under the hood)
-
-This project uses **GitHub App Manifest Flow**.
-
-It will automatically:
-
-* create a GitHub App
-* set webhook to:
-
-  ```
-  https://your-server/github/webhook
-  ```
-* request permissions:
-
-  * `administration: write`
-* subscribe to:
-
-  * `workflow_job`
-
-## 🧪 Usage
-
-In your repository:
-
-```yaml
-jobs:
-  build:
-    runs-on: [self-hosted, ephemeral]
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "hello from ephemeral runner"
-```
-
-## 📌 Important Notes
-
-### 🔁 Runner lifecycle
-
-* Each job gets a **fresh runner**
-* Runner is automatically removed after execution
-
-### 🐳 Docker requirement
-
-The pool server needs access to Docker:
-
-```yaml
-- /var/run/docker.sock:/var/run/docker.sock
-```
-
-### ⚠️ Security
-
-This project runs **untrusted workflow code**.
-
-> Do NOT run on sensitive machines.
-
-Recommended:
-
-* dedicated VM
-* cloud instance
-* homelab node
-
-## ❓ FAQ
-
-### Can I use one runner for multiple repositories?
-
-Not directly.
-
-GitHub only supports repo/org/enterprise-level runners.
-
-👉 This project works around that using dynamic runner creation.
-
-### Do I need Kubernetes?
-
-No.
-
-👉 This project is designed for **single-machine setups using Docker**.
-
-### Can I use this for organizations?
-
-Yes.
-
-But it's primarily optimized for:
-
-* personal accounts
-* small teams
-
-## 🎯 Target Use Cases
-
-* Personal GitHub accounts with multiple repositories
-* Homelab / NAS CI setups
-* Small teams without Kubernetes
-* Developers wanting full control over CI environment
+See [`docs/architecture.md`](docs/architecture.md) for the full design,
+including the GitHub App Manifest flow, sqlite job durability, and
+permission scopes.
 
 ## 📦 Tech Stack
 
@@ -193,12 +131,7 @@ But it's primarily optimized for:
 
 ## 📄 License
 
-Apache License 2.0
-
-## ⭐ If this helps you
-
-Give it a star — it helps others discover the project!
-
+[Apache License 2.0](LICENSE) — Copyright 2026 Muhan Li.
 
 ## 🙌 Acknowledgements
 

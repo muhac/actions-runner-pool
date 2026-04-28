@@ -186,6 +186,25 @@ func TestLoad_MaxConcurrentRunnersInvalid(t *testing.T) {
 	})
 }
 
+func TestLoad_MaxConcurrentRunnersBelowOne(t *testing.T) {
+	for _, in := range []string{"0", "-1", "-100"} {
+		t.Run(in, func(t *testing.T) {
+			withEnv(t, map[string]string{
+				"BASE_URL":               "https://example.test",
+				"MAX_CONCURRENT_RUNNERS": in,
+			}, func() {
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected error for MAX_CONCURRENT_RUNNERS=%s", in)
+				}
+				if !strings.Contains(err.Error(), "MAX_CONCURRENT_RUNNERS") {
+					t.Errorf("error should mention MAX_CONCURRENT_RUNNERS, got: %v", err)
+				}
+			})
+		})
+	}
+}
+
 func TestLoad_GitHubAPIBase(t *testing.T) {
 	cases := []struct {
 		name string
