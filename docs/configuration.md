@@ -1,8 +1,8 @@
 # Configuration reference
 
 All configuration is read from environment variables at startup
-(`internal/config/config.go`). Boolean / unset semantics are listed
-explicitly because empty-string and unset are treated the same.
+(`internal/config/config.go`). Empty-string and unset are treated the
+same.
 
 ## Required
 
@@ -15,7 +15,7 @@ explicitly because empty-string and unset are treated the same.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port. |
-| `STORE_DSN` | `file:gharp.db?_pragma=journal_mode(WAL)` | SQLite DSN. In Docker, point at the mounted volume (e.g. `file:/data/gharp.db?_pragma=journal_mode(WAL)`). |
+| `STORE_DSN` | `file:/data/gharp.db?_pragma=journal_mode(WAL)` (in the published `muhac/gharp` image) ・ `file:gharp.db?_pragma=journal_mode(WAL)` (when running the binary directly) | SQLite DSN. The image sets a default that lands in `/data`, which is declared as a `VOLUME` — mount a host directory or named volume there to survive container restarts. Override if you want the DB elsewhere. |
 | `LOG_LEVEL` | `info` | One of `debug` / `info` / `warn` (alias `warning`) / `error`. Unknown values fall back to `info`. |
 
 ## Runners
