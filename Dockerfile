@@ -5,7 +5,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gharp ./cmd/gharp
 
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates docker-cli
 COPY --from=build /out/gharp /usr/local/bin/gharp
 EXPOSE 8080
