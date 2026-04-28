@@ -15,6 +15,10 @@ import (
 // and event-routing logic never panic. The signature is computed on the
 // fuzzer-supplied body so we exercise the parsing path, not the auth
 // rejection path (which is already unit-tested).
+//
+// The store/enqueuer are recreated per iteration: fakeStore appends to
+// its internal slices/maps, and a long fuzz run would otherwise grow
+// memory unboundedly and let earlier iterations bias later behavior.
 func FuzzWebhook_Handler(f *testing.F) {
 	f.Add([]byte(`{}`), "ping")
 	f.Add([]byte(`{"action":"queued"}`), "workflow_job")
@@ -23,14 +27,12 @@ func FuzzWebhook_Handler(f *testing.F) {
 	f.Add([]byte(``), "workflow_job")
 	f.Add([]byte(`{"action":"queued","workflow_job":{"id":1,"labels":["self-hosted"]},"repository":{"full_name":"a/b"},"installation":{"id":1}}`), "workflow_job")
 
-	st := &fakeStore{appConfig: &store.AppConfig{WebhookSecret: testWebhookSecret}}
-	h := &WebhookHandler{
-		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: []string{"self-hosted"}},
-		Store:     st,
-		Scheduler: &spyEnqueuer{},
-	}
+	cfg := &config.Config{BaseURL: "https://example.test", RunnerLabels: []string{"self-hosted"}}
 
 	f.Fuzz(func(t *testing.T, body []byte, event string) {
+		st := &fakeStore{appConfig: &store.AppConfig{WebhookSecret: testWebhookSecret}}
+		h := &WebhookHandler{Cfg: cfg, Store: st, Scheduler: &spyEnqueuer{}}
+
 		req := httptest.NewRequest(http.MethodPost, "/github/webhook", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", event)
 		req.Header.Set("X-Hub-Signature-256", sign(testWebhookSecret, body))
