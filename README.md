@@ -28,9 +28,20 @@ docker run -d --name gharp \
 ```
 
 Then open `${BASE_URL}/setup`, click **Create GitHub App**, and install
-the App on the repos you want runners for. Every `workflow_job` whose
-`runs-on` set intersects `RUNNER_LABELS` (default `self-hosted`) will
-get a fresh runner.
+the App on the repos you want runners for. Add a workflow to one of
+them:
+
+```yaml
+jobs:
+  build:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "hello from ephemeral runner"
+```
+
+Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
+(default `self-hosted`) will get a fresh runner.
 
 `BASE_URL` must be a public HTTPS URL GitHub can reach — see
 [`docs/deploy.md`](docs/deploy.md) for Cloudflare Tunnel / ngrok /
@@ -108,19 +119,6 @@ It will automatically:
 * subscribe to:
 
   * `workflow_job`
-
-## 🧪 Usage
-
-In your repository:
-
-```yaml
-jobs:
-  build:
-    runs-on: [self-hosted]
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "hello from ephemeral runner"
-```
 
 ## 📌 Important Notes
 
