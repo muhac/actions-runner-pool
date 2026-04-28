@@ -24,7 +24,7 @@ same.
 | --- | --- | --- |
 | `RUNNER_IMAGE` | `myoung34/github-runner:latest` | Image used as `{{.Image}}` in the dispatch command. Pin a tag or digest for reproducibility. |
 | `RUNNER_LABELS` | `self-hosted` | Comma-separated allowlist. A `workflow_job` is accepted if **any** of its `runs-on` labels appears here. To partition multiple gharp deployments, use a unique label per pool — sharing `self-hosted` between pools won't isolate them. |
-| `MAX_CONCURRENT_RUNNERS` | `4` | Global cap on simultaneously running ephemeral runners. Invalid integers fall back to the default. |
+| `MAX_CONCURRENT_RUNNERS` | `4` | Global cap on simultaneously running ephemeral runners. Must be `>= 1` (`0` or negative fails startup). Non-integer strings silently fall back to the default. |
 | `DOCKER_HOST` | _(unset)_ | Docker daemon endpoint. Unset = use the default socket the Docker SDK picks (`/var/run/docker.sock` on Linux). Override for remote daemons (e.g. `tcp://docker:2375`). |
 | `RUNNER_COMMAND` | _(see below)_ | JSON array of argv (no shell). Required placeholders are validated at startup: `{{.ContainerName}}`, `{{.RegistrationToken}}`, `{{.RunnerName}}`, `{{.RepoURL}}`, `{{.Labels}}`. Optional: `{{.Image}}`. Empty array, non-array JSON, or a missing required placeholder cause startup to fail. |
 
