@@ -88,8 +88,26 @@ func (s *Scheduler) replay(ctx context.Context) {
 }
 
 func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
-	// Cap check must happen before any GitHub API call so we never burn
-	// rate limit on a job we can't launch.
+	// Load the job FIRST so non-pending jobs short-circuit immediately —
+	// otherwise we'd keep AfterFunc-re-enqueueing them forever while at
+	// cap. The cap-before-GitHub-API invariant still holds: GetJob is
+	// store-only, no GitHub call yet.
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		s.log.Error("dispatch: GetJob failed; leaving pending", "job_id", jobID, "err", err)
+		return
+	}
+	if job == nil {
+		s.log.Warn("dispatch: job not found", "job_id", jobID)
+		return
+	}
+	if job.Status != "pending" {
+		s.log.Debug("dispatch: job no longer pending, skipping", "job_id", jobID, "status", job.Status)
+		return
+	}
+
+	// Cap check before any GitHub API call so we never burn rate limit
+	// on a job we can't launch.
 	n, err := s.store.ActiveRunnerCount(ctx)
 	if err != nil {
 		s.log.Error("dispatch: ActiveRunnerCount failed; leaving pending", "job_id", jobID, "err", err)
@@ -107,20 +125,6 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			}
 			s.Enqueue(jobID)
 		})
-		return
-	}
-
-	job, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		s.log.Error("dispatch: GetJob failed; leaving pending", "job_id", jobID, "err", err)
-		return
-	}
-	if job == nil {
-		s.log.Warn("dispatch: job not found", "job_id", jobID)
-		return
-	}
-	if job.Status != "pending" {
-		s.log.Debug("dispatch: job no longer pending, skipping", "job_id", jobID, "status", job.Status)
 		return
 	}
 

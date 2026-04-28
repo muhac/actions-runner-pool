@@ -415,6 +415,34 @@ func TestDispatch_NonPendingJob_Skips(t *testing.T) {
 	}
 }
 
+// Non-pending job at cap must NOT be re-enqueued. The status check
+// runs before the cap check so the job short-circuits, otherwise it
+// would AfterFunc itself forever and crowd out real pending jobs.
+func TestDispatch_NonPendingJobAtCap_DoesNotRequeue(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	if err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
+		t.Fatal(err)
+	}
+	// At cap (cfg=1, one active runner already).
+	if err := st.InsertRunner(context.Background(), &store.Runner{
+		ContainerName: "occupied", Repo: "owner/repo",
+		RunnerName: "occupied", Labels: "self-hosted", Status: "starting",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestScheduler(t, newCfg(1), st, &spyGH{}, &spyLauncher{})
+	s.dispatch(context.Background(), 1)
+
+	time.Sleep(10 * time.Millisecond) // give any (wrong) AfterFunc a chance to fire
+	if got := len(s.jobCh); got != 0 {
+		t.Fatalf("non-pending job re-enqueued at cap: depth=%d", got)
+	}
+}
+
 // --- utility ----------------------------------------------------------------
 
 func drainChan(ch chan int64) []int64 {
