@@ -491,6 +491,38 @@ All config is read from environment variables. See
 variable, its default, and validation rules). YAML config can be added
 later if env vars get unwieldy. Not before.
 
+## v1.1 roadmap (planned, not yet shipped)
+
+Concrete v1.x work, ordered by impact on correctness:
+
+1. **Reconciliation loop.** Periodic goroutine (~60s) that joins
+   `runners` × `docker inspect` × GitHub `/runners`. Cleans up ghost
+   runners (started, never claimed a job), force-removes stale
+   GitHub-side registrations, and lets us shrink the dispatched-replay
+   window from 5 min to "as soon as we notice the runner is idle." See
+   sketch in §"Ghost runners and reconciliation".
+2. **Graceful drain on SIGTERM.** Current behavior cancels the parent
+   context immediately, killing in-flight `docker run` invocations and
+   tearing down ephemeral containers mid-job. Drain should let
+   currently-launching dispatches finish, refuse new ones, then exit.
+3. **Bounded retry/backoff on Docker failures.** A single
+   `docker.sock` blip currently relies on the 5-min replay window;
+   explicit retry with exponential backoff catches transient failures
+   in seconds.
+4. **JIT runner registration.** GitHub's just-in-time config tokens
+   bind a runner to a specific job ID up front, eliminating the
+   runner↔job race. Once adopted, the `dispatched`/replay machinery
+   can be dropped — JIT is the cleaner root-fix.
+5. **Webhook secret / pem rotation UI.** Today rotation = wipe DB,
+   delete App, re-run `/setup`. v1.x: a "paste a new secret" form so
+   users can rotate without losing app state.
+6. **Per-installation cap.** Current `MAX_CONCURRENT_RUNNERS` is
+   global. Multi-tenant deployments need per-installation quotas to
+   stop one repo from monopolizing slots.
+7. **Ops endpoints / dashboard.** `/healthz` exists; add `/metrics`,
+   `/jobs?status=...`, an admin force-rerun, and eventually a small
+   dashboard beyond the one-shot `/setup` page.
+
 ## Future split points
 
 If/when the project grows, these are the natural seams:
