@@ -96,13 +96,17 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 	if n >= s.cfg.MaxConcurrentRunners {
-		s.log.Debug("dispatch: at concurrency cap, re-enqueueing", "job_id", jobID, "active", n, "cap", s.cfg.MaxConcurrentRunners)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(s.capBackoff):
-		}
-		s.Enqueue(jobID)
+		s.log.Debug("dispatch: at concurrency cap, scheduling re-enqueue", "job_id", jobID, "active", n, "cap", s.cfg.MaxConcurrentRunners, "backoff", s.capBackoff)
+		// Re-enqueue asynchronously so the worker loop keeps draining
+		// other jobs (and observing ctx.Done) instead of parking on a
+		// sleep here. AfterFunc fires on its own goroutine; if ctx is
+		// already cancelled by the time it runs, drop the re-enqueue.
+		time.AfterFunc(s.capBackoff, func() {
+			if ctx.Err() != nil {
+				return
+			}
+			s.Enqueue(jobID)
+		})
 		return
 	}
 

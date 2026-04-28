@@ -286,9 +286,15 @@ func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
 	if ln.calls.Load() != 0 {
 		t.Fatalf("Launch called under cap: %d", ln.calls.Load())
 	}
-	// The job must be re-enqueued for a later attempt.
-	if got := <-s.jobCh; got != 1 {
-		t.Fatalf("expected job 1 re-enqueued, got %d", got)
+	// Re-enqueue is async (time.AfterFunc) — capBackoff is 1ms in tests
+	// so the read below should arrive promptly.
+	select {
+	case got := <-s.jobCh:
+		if got != 1 {
+			t.Fatalf("expected job 1 re-enqueued, got %d", got)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("expected job 1 re-enqueued within 1s")
 	}
 }
 
@@ -463,15 +469,11 @@ func TestDispatch_CapBackoffCancelled_NoRequeue(t *testing.T) {
 	s.capBackoff = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		s.dispatch(ctx, 1)
-		close(done)
-	}()
-	// Cancel mid-backoff.
-	time.Sleep(10 * time.Millisecond)
+	s.dispatch(ctx, 1)
+	// dispatch schedules an AfterFunc and returns immediately. Cancel
+	// before AfterFunc fires; assert it respects the cancellation.
 	cancel()
-	<-done
+	time.Sleep(150 * time.Millisecond) // > capBackoff so AfterFunc has fired
 
 	if got := len(s.jobCh); got != 0 {
 		t.Fatalf("channel depth=%d, want 0 (ctx cancel must skip re-enqueue)", got)
