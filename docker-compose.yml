@@ -5,10 +5,8 @@ services:
     container_name: gharp
     restart: unless-stopped
     env_file: .env
-    # RUNNER_COMMAND lives here, not in .env, because .env values can't span
-    # lines. YAML's `>-` folds the multi-line block into a single line by
-    # collapsing newlines into spaces — JSON tolerates the extra whitespace.
-    # `environment:` overrides any same-named key from `env_file:`.
+    # RUNNER_COMMAND uses YAML `>-` so the multi-line source folds to one
+    # line at runtime; .env can't hold multi-line values.
     environment:
       RUNNER_COMMAND: >-
         [
@@ -32,12 +30,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gharp-data:/data
-      # Shared work-dir tree. gharp creates per-runner subdirs under
-      # /tmp/gharp/<container-name>/_work and passes the SAME path as a
-      # `-v` mount source to `docker run`. The mount source is interpreted
-      # by the host docker daemon, so the path must exist on the host —
-      # bind-mounting /tmp/gharp into gharp itself keeps host and
-      # container views identical.
+      # Mount the workdir tree at the same path inside the gharp container
+      # and on the host, so `-v /tmp/gharp/...` sources in RUNNER_COMMAND
+      # resolve identically from both views.
       - /tmp/gharp:/tmp/gharp
 
 volumes:

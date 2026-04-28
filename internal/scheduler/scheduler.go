@@ -14,13 +14,12 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-// Launcher is the subset of *runner.Launcher dispatch depends on. Defined
-// here so tests can swap a spy without spinning up docker.
+// Launcher is the subset of *runner.Launcher dispatch depends on.
 type Launcher interface {
 	Launch(ctx context.Context, spec runner.Spec) error
 }
 
-// GitHubClient is the subset of *github.Client dispatch calls. Same motivation.
+// GitHubClient is the subset of *github.Client dispatch calls.
 type GitHubClient interface {
 	AppJWT(pem []byte, appID int64) (string, error)
 	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
@@ -35,12 +34,8 @@ type Scheduler struct {
 	jobCh  chan int64
 	log    *slog.Logger
 
-	// capBackoff is how long dispatch waits before re-enqueueing when the
-	// concurrency cap is hit. Test hook.
 	capBackoff time.Duration
-	// nameFn produces (containerName, runnerName) for a fresh dispatch.
-	// Test hook so assertions can pin a value.
-	nameFn func(jobID int64) (string, string)
+	nameFn     func(jobID int64) (string, string)
 }
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
@@ -56,10 +51,8 @@ func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *
 	}
 }
 
-// Enqueue is called from the webhook handler after the job row is persisted,
-// and from dispatch itself when the concurrency cap re-queues a job.
-// Non-blocking: if the channel is full the job stays pending in sqlite and
-// the next startup-replay (or a later Enqueue with capacity) picks it up.
+// Enqueue is non-blocking: if the channel is full the job stays pending in
+// sqlite and the next startup-replay picks it up.
 func (s *Scheduler) Enqueue(jobID int64) {
 	select {
 	case s.jobCh <- jobID:
@@ -68,8 +61,6 @@ func (s *Scheduler) Enqueue(jobID int64) {
 	}
 }
 
-// Run replays pending jobs on startup, then drains the channel, dispatching
-// each job. Blocks until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.replay(ctx)
 	for {
@@ -82,9 +73,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
-// replay re-enqueues every pending job from the store. Channel buffer is
-// finite — overflow is logged via Enqueue's default branch and stays pending
-// until the next startup or a later capacity opening.
 func (s *Scheduler) replay(ctx context.Context) {
 	jobs, err := s.store.PendingJobs(ctx)
 	if err != nil {
@@ -100,10 +88,9 @@ func (s *Scheduler) replay(ctx context.Context) {
 	}
 }
 
-// dispatch processes one jobID. Sequencing matters — see comments inline.
 func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
-	// 1. Concurrency cap BEFORE any token mint or API call. If we're over,
-	//    re-enqueue (with a small backoff to avoid a busy spin) and bail.
+	// Cap check must happen before any GitHub API call so we never burn
+	// rate limit on a job we can't launch.
 	n, err := s.store.ActiveRunnerCount(ctx)
 	if err != nil {
 		s.log.Error("dispatch: ActiveRunnerCount failed; leaving pending", "job_id", jobID, "err", err)
@@ -120,9 +107,6 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// 2. Load the job. Skip if it's already been advanced (in_progress /
-	//    completed) — typical when the channel and store disagree across a
-	//    restart, or after a duplicate Enqueue.
 	job, err := s.store.GetJob(ctx, jobID)
 	if err != nil {
 		s.log.Error("dispatch: GetJob failed; leaving pending", "job_id", jobID, "err", err)
@@ -137,9 +121,6 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// 3. Map repo -> installation. A missing row means the installation
-	//    webhook hasn't landed yet (or was missed); leave the job pending so
-	//    the next replay picks it up after the lazy-write in webhook.
 	inst, err := s.store.InstallationForRepo(ctx, job.Repo)
 	if err != nil {
 		s.log.Error("dispatch: InstallationForRepo failed", "job_id", jobID, "repo", job.Repo, "err", err)
@@ -150,14 +131,12 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// 4. App credentials.
 	appCfg, err := s.store.GetAppConfig(ctx)
 	if err != nil || appCfg == nil {
 		s.log.Error("dispatch: GetAppConfig failed; leaving pending", "job_id", jobID, "err", err)
 		return
 	}
 
-	// 5. Mint JWT -> installation token -> registration token.
 	jwtStr, err := s.gh.AppJWT(appCfg.PEM, appCfg.AppID)
 	if err != nil {
 		s.log.Error("dispatch: AppJWT failed", "job_id", jobID, "err", err)
@@ -174,9 +153,8 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// 6. Insert runner row in 'starting' before the launch — if we crash
-	//    between Insert and Launch, reconciliation (v1.1) sees a starting
-	//    runner with no live container and can clean up.
+	// Insert before Launch so a crash in between leaves a 'starting' row
+	// for v1.1 reconciliation to clean up.
 	containerName, runnerName := s.nameFn(jobID)
 	rowLabels := strings.Join(s.cfg.RunnerLabels, ",")
 	if rowLabels == "" {
@@ -193,7 +171,6 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// 7. Launch.
 	if err := s.runner.Launch(ctx, runner.Spec{
 		ContainerName:     containerName,
 		RegistrationToken: regTok,
@@ -211,15 +188,9 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
 }
 
-// defaultNameFn returns ("gharp-<jobID>-<8 hex>", same value).
-// container_name and runner_name share the value — both columns must be
-// populated from v1 (per architecture.md), and no caller depends on them
-// being distinct.
 func defaultNameFn(jobID int64) (string, string) {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure on a sane system means the world is on fire;
-		// fall back to a timestamp suffix so dispatch can still proceed.
 		name := fmt.Sprintf("gharp-%d-%d", jobID, time.Now().UnixNano())
 		return name, name
 	}

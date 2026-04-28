@@ -111,12 +111,8 @@ func envInt(key string, def int) int {
 	return def
 }
 
-// parseLabels splits "a,b, c" into ["a","b","c"]. Empty input → the
-// single-element default ["self-hosted"], which keeps the webhook from
-// accepting jobs whose `runs-on` is GitHub-hosted (e.g. ubuntu-latest).
-// In practice GitHub doesn't currently send workflow_job webhooks for
-// hosted-only jobs, but defaulting to self-hosted documents intent and
-// guards against future GitHub behavior changes.
+// parseLabels splits "a,b, c" into ["a","b","c"]. Empty input defaults to
+// ["self-hosted"] so we never accept jobs targeting GitHub-hosted runners.
 func parseLabels(s string) []string {
 	if s == "" {
 		return []string{"self-hosted"}
