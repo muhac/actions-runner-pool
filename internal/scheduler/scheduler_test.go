@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,12 +48,27 @@ type spyGH struct {
 	jwtErr      error
 	instErr     error
 	regErr      error
+	mu          sync.Mutex
 	callOrder   []string
+}
+
+func (g *spyGH) recordCall(name string) {
+	g.mu.Lock()
+	g.callOrder = append(g.callOrder, name)
+	g.mu.Unlock()
+}
+
+func (g *spyGH) order() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]string, len(g.callOrder))
+	copy(out, g.callOrder)
+	return out
 }
 
 func (g *spyGH) AppJWT(pem []byte, appID int64) (string, error) {
 	g.jwtCalls.Add(1)
-	g.callOrder = append(g.callOrder, "AppJWT")
+	g.recordCall("AppJWT")
 	if g.jwtErr != nil {
 		return "", g.jwtErr
 	}
@@ -61,7 +77,7 @@ func (g *spyGH) AppJWT(pem []byte, appID int64) (string, error) {
 
 func (g *spyGH) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error) {
 	g.instCalls.Add(1)
-	g.callOrder = append(g.callOrder, "InstallationToken")
+	g.recordCall("InstallationToken")
 	if g.instErr != nil {
 		return "", g.instErr
 	}
@@ -70,7 +86,7 @@ func (g *spyGH) InstallationToken(ctx context.Context, jwt string, installationI
 
 func (g *spyGH) RegistrationToken(ctx context.Context, instTok, repo string) (string, error) {
 	g.regCalls.Add(1)
-	g.callOrder = append(g.callOrder, "RegistrationToken")
+	g.recordCall("RegistrationToken")
 	if g.regErr != nil {
 		return "", g.regErr
 	}
@@ -80,14 +96,17 @@ func (g *spyGH) RegistrationToken(ctx context.Context, instTok, repo string) (st
 // --- spy launcher ------------------------------------------------------------
 
 type spyLauncher struct {
-	calls   atomic.Int64
+	calls    atomic.Int64
+	mu       sync.Mutex
 	lastSpec runner.Spec
-	err     error
+	err      error
 }
 
 func (l *spyLauncher) Launch(ctx context.Context, spec runner.Spec) error {
 	l.calls.Add(1)
+	l.mu.Lock()
 	l.lastSpec = spec
+	l.mu.Unlock()
 	return l.err
 }
 
@@ -361,12 +380,13 @@ func TestDispatch_TokenOrder_CapBeforeJWT(t *testing.T) {
 	}
 	// Order within github calls: AppJWT before InstallationToken before RegistrationToken.
 	want := []string{"AppJWT", "InstallationToken", "RegistrationToken"}
-	if len(gh.callOrder) != 3 {
-		t.Fatalf("callOrder=%v, want 3 entries", gh.callOrder)
+	order := gh.order()
+	if len(order) != 3 {
+		t.Fatalf("callOrder=%v, want 3 entries", order)
 	}
 	for i := range want {
-		if gh.callOrder[i] != want[i] {
-			t.Fatalf("callOrder[%d]=%q, want %q (full=%v)", i, gh.callOrder[i], want[i], gh.callOrder)
+		if order[i] != want[i] {
+			t.Fatalf("callOrder[%d]=%q, want %q (full=%v)", i, order[i], want[i], order)
 		}
 	}
 }
