@@ -49,13 +49,11 @@ the GitHub App Manifest flow and persists the credentials locally.
 Pick the repos (or "All repositories") you want runners for and submit.
 
 > ⚠️ **Self-hosted runners + public repos = remote code execution.**
-> GitHub [explicitly recommends against](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access-with-runner-groups#about-self-hosted-runner-security)
+> GitHub [explicitly recommends against](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
 > using self-hosted runners with public repositories: any contributor
-> who can open a PR can run arbitrary code on your machine. gharp
-> doesn't change this. Only install the App on **private** repos you
-> trust, and run gharp on a **dedicated VM / cloud instance / homelab
-> node** — never on a host that holds secrets you wouldn't paste into
-> a workflow.
+> who can open a PR can run arbitrary code on your machine.
+> Only install the App on **private** repos you trust,
+> and run gharp on a **dedicated VM / cloud instance / homelab node**.
 
 ### 4. Add a workflow
 
@@ -85,28 +83,21 @@ Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
 
 GitHub does **not support "user-level" runners**.
 
-* Runners are scoped to:
-
-  * repository
-  * organization
-  * enterprise
+* Runners are scoped to: repository, organization, or enterprise
 
 This makes it hard to:
 
 * share a runner across multiple repositories
 * use self-hosted runners efficiently in personal accounts
-* keep environments clean between jobs
 * scale runners dynamically
 
-## 💡 This project solves that
+💡 **This project solves that**
 
 * Uses **GitHub App + webhook (`workflow_job`)**
 * Dynamically creates **ephemeral runners per job**
 * Automatically cleans up after execution
 
-👉 Result:
-
-> You get **GitHub-hosted-like behavior on your own machine**
+👉 You get **GitHub-hosted-like behavior on your own machine**
 
 ## 🏗️ Architecture
 
