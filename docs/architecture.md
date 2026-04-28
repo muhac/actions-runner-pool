@@ -472,19 +472,10 @@ Things explicitly **not** in this design:
 
 ## Configuration
 
-All config via env vars (v1):
-
-| Var | Purpose |
-|---|---|
-| `PORT` | HTTP listen port |
-| `BASE_URL` | Public URL (used in manifest flow + webhook URL) |
-| `STORE_DSN` | sqlite path, e.g. `file:/data/gharp.db` |
-| `RUNNER_IMAGE` | Runner container image (default: `myoung34/github-runner:latest`) |
-| `MAX_CONCURRENT_RUNNERS` | Concurrency cap |
-| `DOCKER_HOST` | Optional, defaults to unix socket |
-| `LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
-
-YAML config can be added later if env vars get unwieldy. Not before.
+All config is read from environment variables. See
+[`configuration.md`](configuration.md) for the full reference (every
+variable, its default, and validation rules). YAML config can be added
+later if env vars get unwieldy. Not before.
 
 ## Future split points
 

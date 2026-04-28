@@ -200,8 +200,8 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 
 	switch ev.Action {
 	case "queued":
-		// Lazy-write the repo->installation mapping in case we missed the
-		// installation event (resilience per components.md).
+		// Lazy-write the repo->installation mapping in case we missed
+		// the installation event (resilience).
 		if ev.Installation.ID != 0 && ev.Repository.FullName != "" {
 			if err := h.Store.UpsertRepoInstallation(r.Context(), ev.Repository.FullName, ev.Installation.ID); err != nil {
 				h.logError("lazy upsert repo->installation", err)
