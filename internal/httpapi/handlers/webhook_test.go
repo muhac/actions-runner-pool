@@ -257,6 +257,58 @@ func TestWebhook_InProgress_BindsRunnerAndMarksBusy(t *testing.T) {
 	}
 }
 
+func TestWebhook_InProgress_EmptyRunnerName_Skipped(t *testing.T) {
+	// Observed in production: GitHub fires in_progress with runner_id=0
+	// and runner_name="" when our gharp-launched runner lost the race
+	// to a different runner (the runner↔job drift documented in
+	// architecture.md). Without this skip, the row's status would
+	// advance to in_progress and PendingJobs replay couldn't rescue it.
+	body := []byte(`{
+		"action": "in_progress",
+		"workflow_job": {"id": 12345, "runner_id": 0, "runner_name": "", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/repo"},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedInProgress) != 0 {
+		t.Errorf("MarkJobInProgress should not be called: %+v", st.markedInProgress)
+	}
+	if len(st.updatedRunnerByName) != 0 {
+		t.Errorf("UpdateRunnerStatusByName should not be called: %+v", st.updatedRunnerByName)
+	}
+}
+
+func TestWebhook_InProgress_NoOpWhenAlreadyAdvanced_DoesNotTouchRunner(t *testing.T) {
+	// A late in_progress arriving after the row is already completed
+	// must not flip the (now finished) runner back to busy. The fake's
+	// markJobInProgressNoOp simulates the store's WHERE-status guard
+	// returning advanced=false.
+	body := []byte(`{
+		"action": "in_progress",
+		"workflow_job": {"id": 12345, "runner_id": 77, "runner_name": "runner-A", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/repo"},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	st.markJobInProgressNoOp = true
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedInProgress) != 1 {
+		t.Errorf("MarkJobInProgress should be called once: %+v", st.markedInProgress)
+	}
+	if len(st.updatedRunnerByName) != 0 {
+		t.Errorf("runner status must NOT be touched on no-op advance: %+v", st.updatedRunnerByName)
+	}
+}
+
 func TestWebhook_Completed_RecordsConclusion(t *testing.T) {
 	body := []byte(`{
 		"action": "completed",

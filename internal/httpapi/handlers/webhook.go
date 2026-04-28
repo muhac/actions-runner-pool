@@ -228,10 +228,27 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusOK)
 
 	case "in_progress":
-		if err := h.Store.MarkJobInProgress(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.RunnerID, ev.WorkflowJob.RunnerName); err != nil {
+		// Empty runner_name on an in_progress event means GitHub fired
+		// the transition before binding a real runner — observed in
+		// dispatch-race situations (we launched a runner but a different
+		// runner won the assignment, leaving this row with no real
+		// owner). Skipping preserves the 'pending'/'dispatched' status
+		// so the scheduler's replay can still rescue the job.
+		if ev.WorkflowJob.RunnerName == "" {
+			if h.Log != nil {
+				h.Log.Warn("webhook: in_progress with empty runner_name, skipping", "job_id", ev.WorkflowJob.ID)
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		advanced, err := h.Store.MarkJobInProgress(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.RunnerID, ev.WorkflowJob.RunnerName)
+		if err != nil {
 			h.logError("mark job in_progress", err)
 		}
-		if ev.WorkflowJob.RunnerName != "" {
+		// Only flip the runner to busy if the job row actually advanced.
+		// A late in_progress arriving after completed leaves the job
+		// untouched; we must not resurrect a finished runner.
+		if advanced {
 			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "busy"); err != nil {
 				h.logError("update runner status busy", err)
 			}

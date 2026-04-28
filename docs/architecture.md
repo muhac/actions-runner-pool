@@ -76,7 +76,7 @@ Tables (initial cut):
 
 - **`app_config`** — App ID, webhook secret, private key, BASE_URL. One row.
 - **`installations`** — installation ID, account login, account type, scope.
-- **`jobs`** — workflow_job ID, repo full name, action (queued/in_progress/completed), labels, dedupe key, received_at, status.
+- **`jobs`** — workflow_job ID, repo full name, action (queued/in_progress/completed), labels, dedupe key, received_at, status. The status state machine is `pending` → `dispatched` (gharp launched a runner; GitHub hasn't bound it yet) → `in_progress` (real `workflow_job: in_progress` webhook with non-empty `runner_name`) → `completed`. The `dispatched` placeholder lets the scheduler's replay loop rescue jobs whose runner lost the assignment race.
 - **`runners`** — container name, repo full name, runner name, labels, status, started_at, finished_at.
 
 ### 4. Ephemeral, per-job containers
@@ -227,9 +227,13 @@ This means:
 
 | action | what we do | why |
 |---|---|---|
-| `queued` | enqueue + spawn runner (the hot path above) | the trigger |
-| `in_progress` | `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` and `UPDATE runners SET status='busy'` matching by `runner_name` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
+| `queued` | enqueue + spawn runner (the hot path above), then `MarkJobDispatched` flips `pending → dispatched` | the trigger; the placeholder distinguishes "runner launched, awaiting binding" from a real binding |
+| `in_progress` | if `runner_name == ""`, **drop the event** (a dispatch race we lost — see below); otherwise `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` (only if currently `pending`/`dispatched`) and `UPDATE runners SET status='busy'` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
 | `completed` | `UPDATE jobs SET status='completed', conclusion=?` and `UPDATE runners SET status='finished', finished_at=?`. Container is already `--rm`-ing itself. | bookkeeping; no new docker action |
+
+The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched`, and the scheduler's periodic replay (every `replayPeriod`, default 1 min) re-dispatches it once `updated_at` falls past `dispatchedReplayAge` (5 min).
+
+The companion guard on the `in_progress` writer: `MarkJobInProgress` now reports whether it actually advanced a row, and the webhook only flips the runner to `busy` when it did. A late `in_progress` arriving after `completed` therefore can no longer resurrect a finished runner.
 
 #### Ghost runners and reconciliation
 
@@ -488,6 +492,38 @@ All config is read from environment variables. See
 [`configuration.md`](configuration.md) for the full reference (every
 variable, its default, and validation rules). YAML config can be added
 later if env vars get unwieldy. Not before.
+
+## v1.1 roadmap (planned, not yet shipped)
+
+Concrete v1.x work, ordered by impact on correctness:
+
+1. **Reconciliation loop.** Periodic goroutine (~60s) that joins
+   `runners` × `docker inspect` × GitHub `/runners`. Cleans up ghost
+   runners (started, never claimed a job), force-removes stale
+   GitHub-side registrations, and lets us shrink the dispatched-replay
+   window from 5 min to "as soon as we notice the runner is idle." See
+   sketch in §"Ghost runners and reconciliation".
+2. **Graceful drain on SIGTERM.** Current behavior cancels the parent
+   context immediately, killing in-flight `docker run` invocations and
+   tearing down ephemeral containers mid-job. Drain should let
+   currently-launching dispatches finish, refuse new ones, then exit.
+3. **Bounded retry/backoff on Docker failures.** A single
+   `docker.sock` blip currently relies on the 5-min replay window;
+   explicit retry with exponential backoff catches transient failures
+   in seconds.
+4. **JIT runner registration.** GitHub's just-in-time config tokens
+   bind a runner to a specific job ID up front, eliminating the
+   runner↔job race. Once adopted, the `dispatched`/replay machinery
+   can be dropped — JIT is the cleaner root-fix.
+5. **Webhook secret / pem rotation UI.** Today rotation = wipe DB,
+   delete App, re-run `/setup`. v1.x: a "paste a new secret" form so
+   users can rotate without losing app state.
+6. **Per-installation cap.** Current `MAX_CONCURRENT_RUNNERS` is
+   global. Multi-tenant deployments need per-installation quotas to
+   stop one repo from monopolizing slots.
+7. **Ops endpoints / dashboard.** `/healthz` exists; add `/metrics`,
+   `/jobs?status=...`, an admin force-rerun, and eventually a small
+   dashboard beyond the one-shot `/setup` page.
 
 ## Future split points
 

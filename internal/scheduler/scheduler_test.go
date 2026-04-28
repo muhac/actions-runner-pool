@@ -25,6 +25,10 @@ func newTestScheduler(t *testing.T, cfg *config.Config, st store.Store, gh GitHu
 	t.Helper()
 	s := New(cfg, st, gh, ln, discardLogger())
 	s.capBackoff = 1 * time.Millisecond
+	// Tighten the periodic replay so tests can observe a rescue without
+	// waiting a real minute. Tests that don't care still pay only the
+	// nil PendingJobs query cost per tick.
+	s.replayPeriod = 20 * time.Millisecond
 	s.nameFn = func(jobID int64) (string, string) {
 		name := "test-runner"
 		return name, name
@@ -265,11 +269,13 @@ func TestDispatch_HappyPath_InsertsStartingRunnerAndLaunches(t *testing.T) {
 	}
 
 	// Job must be advanced past 'pending' so a restart's replay won't
-	// re-dispatch it. Binding stays 0/"" because the webhook hasn't
-	// landed yet — those columns are written later by MarkJobInProgress.
+	// re-dispatch it immediately. The 'dispatched' status is the
+	// gharp-side placeholder; the webhook will promote it to
+	// 'in_progress' once GitHub binds a real runner. Binding stays
+	// 0/"" because that webhook hasn't landed yet.
 	job, _ := st.GetJob(context.Background(), 1)
-	if job == nil || job.Status != "in_progress" {
-		t.Fatalf("job status=%v, want in_progress after launch", job)
+	if job == nil || job.Status != "dispatched" {
+		t.Fatalf("job status=%v, want dispatched after launch", job)
 	}
 	if job.RunnerID != 0 || job.RunnerName != "" {
 		t.Fatalf("job binding=%d/%q, want unset 0/\"\" before webhook", job.RunnerID, job.RunnerName)
@@ -397,7 +403,7 @@ func TestDispatch_NonPendingJob_Skips(t *testing.T) {
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
 	seedPendingJob(t, st, 1, "owner/repo")
-	if err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
+	if _, err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -423,7 +429,7 @@ func TestDispatch_NonPendingJobAtCap_DoesNotRequeue(t *testing.T) {
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
 	seedPendingJob(t, st, 1, "owner/repo")
-	if err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
+	if _, err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
 		t.Fatal(err)
 	}
 	// At cap (cfg=1, one active runner already).
@@ -495,6 +501,49 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
+	}
+}
+
+// (3) periodic replay: a 'dispatched' row whose runner never claimed a
+// job becomes eligible after dispatchedReplayAge and gets re-dispatched
+// by the periodic ticker (not just startup replay).
+func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	// Move the job to 'dispatched' and backdate updated_at so it falls
+	// past dispatchedReplayAge — simulates the exact production scenario
+	// (gharp launched a runner, GitHub gave the runner to a different
+	// job, the row sat in dispatched).
+	if err := st.MarkJobDispatched(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetJobUpdatedAt(context.Background(), 1, time.Now().Add(-1*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	// Deliberately do NOT pre-enqueue; the rescue must come from the
+	// ticker re-running PendingJobs, not from a queued event.
+	s.jobCh = make(chan int64, 256)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for ln.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if ln.calls.Load() == 0 {
+		t.Fatalf("periodic replay never re-dispatched the stale dispatched row")
 	}
 }
 
@@ -762,7 +811,7 @@ func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installa
 func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
 func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
 func (e *errStore) MarkJobDispatched(context.Context, int64) error            { panic("unused") }
-func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) error {
+func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) (bool, error) {
 	panic("unused")
 }
 func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
