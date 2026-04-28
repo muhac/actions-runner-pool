@@ -1,8 +1,10 @@
 # Deployment guide
 
-This walks through a real deployment of gharp on a single host: Docker
-Compose, a public HTTPS URL via Cloudflare Tunnel (or ngrok for dev),
-and the GitHub App setup.
+This walks through a real deployment of gharp on a single host: a
+container, a public HTTPS URL, and the GitHub App setup. The README
+quick-start uses `docker run` directly; this guide covers
+`docker compose`, public-URL options (Cloudflare Tunnel / ngrok /
+Tailscale Funnel), running from source, and day-2 operations.
 
 For the full env-variable reference, see [configuration.md](configuration.md).
 
@@ -91,18 +93,15 @@ The default `docker-compose.yml` mounts:
 
 ## 4. Create the GitHub App
 
-Open `${BASE_URL}/setup` and click **Create GitHub App**.
+Open `${BASE_URL}/setup` and click **Create GitHub App**. gharp drives
+the GitHub App Manifest flow: GitHub generates the App, redirects back
+to `${BASE_URL}/github/app/callback?code=...`, and gharp persists the
+private key, webhook secret, and client secret in `app_config`. Then
+click the install link gharp renders, choose the repos (or "All
+repositories"), and submit.
 
-This drives the GitHub App Manifest flow:
-
-1. Browser POSTs the manifest to GitHub.
-2. GitHub creates the App, issues a temporary code, and redirects to
-   `${BASE_URL}/github/app/callback?code=...&state=...`.
-3. gharp exchanges the code for the App's `private_key`,
-   `webhook_secret`, and `client_secret`, persists them in `app_config`,
-   and renders the **install link**.
-4. Click the install link, choose the repos (or "All repositories"), and
-   submit.
+For the underlying flow and the security caveats, see
+[`architecture.md` § 5](architecture.md).
 
 You're done. From this point, every `workflow_job` whose `runs-on` set
 intersects `RUNNER_LABELS` will get a fresh runner.
@@ -146,21 +145,26 @@ docker compose pull
 docker compose up -d
 ```
 
-The SQLite DB on the `gharp-data` volume is preserved. Schema migrations
-are idempotent and run on startup.
+The SQLite DB on the `gharp-data` volume is preserved. The schema
+uses `CREATE TABLE IF NOT EXISTS` and runs at every startup; there's
+no migration framework yet, so additive schema changes are safe but
+column drops/renames would require manual SQL.
 
 ### Backup
 
-The only stateful piece is `gharp-data` (SQLite). Snapshot the volume,
-or `sqlite3 /data/gharp.db ".backup '/backup/gharp.db'"` from a sidecar.
+The only stateful piece is the `gharp-data` volume (a single SQLite
+file at `/data/gharp.db`). Snapshot the volume with `docker run --rm
+-v gharp-data:/src -v /backup:/dst alpine tar -C /src -czf /dst/gharp-$(date +%F).tgz .`,
+or use `sqlite3 .backup` from a sidecar container that has the
+`sqlite` package installed (the gharp image itself does not).
 
 ### Rotating credentials
 
-`BASE_URL`, the App's `private_key`, and the `webhook_secret` are baked
+`BASE_URL`, the App's private key, and the webhook secret are baked
 into the App at `/setup` time. There's no rotation flow in v1 — to
-change any of them, delete the App on GitHub, drop the `app_config` row
-(or wipe the DB), and re-run `/setup`. See `docs/architecture.md`
-§ "Configuration immutability and key rotation" for the design rationale.
+change any of them, delete the App on GitHub, wipe the gharp volume
+(`docker volume rm gharp-data`), and re-run `/setup`. See
+[`architecture.md` § 6](architecture.md) for the design rationale.
 
 ### Troubleshooting
 
