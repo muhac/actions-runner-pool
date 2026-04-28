@@ -140,8 +140,9 @@ func TestSetup_FreshInstall_RendersForm(t *testing.T) {
 	if !strings.Contains(body, `name="manifest"`) {
 		t.Errorf("missing manifest hidden field in body")
 	}
-	// Manifest JSON is HTML-escaped inside value=, so verify a known field present.
-	if !strings.Contains(body, "gharp-runners") {
+	// Manifest JSON is HTML-escaped inside value=; verify the App name
+	// prefix is present (the suffix is a hash of BaseURL).
+	if !strings.Contains(body, "gharp-") {
 		t.Errorf("manifest payload not embedded; body=%s", body)
 	}
 
