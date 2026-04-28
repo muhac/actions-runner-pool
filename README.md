@@ -101,34 +101,17 @@ This makes it hard to:
 
 ## 🏗️ Architecture
 
-```text
-GitHub → webhook → pool server → docker run → runner → job → exit
+```mermaid
+flowchart LR
+    GH[GitHub] -- workflow_job webhook --> G[gharp]
+    G -- docker run --> R[ephemeral runner]
+    R -- one job, then exit --> X((removed))
+    R -- runs the job --> GH
 ```
 
-* GitHub sends `workflow_job` events
-* Autoscaler receives webhook
-* Starts a runner container (`EPHEMERAL=1`)
-* Runner executes job
-* Container exits and is removed
-
-## ⚙️ GitHub App Setup (What happens under the hood)
-
-This project uses **GitHub App Manifest Flow**.
-
-It will automatically:
-
-* create a GitHub App
-* set webhook to:
-
-  ```
-  https://your-server/github/webhook
-  ```
-* request permissions:
-
-  * `administration: write`
-* subscribe to:
-
-  * `workflow_job`
+See [`docs/architecture.md`](docs/architecture.md) for the full design,
+including the GitHub App Manifest flow, sqlite job durability, and
+permission scopes.
 
 ## 📦 Tech Stack
 
