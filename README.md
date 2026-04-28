@@ -72,7 +72,22 @@ Edit `.env`:
 ```env
 PORT=8080
 BASE_URL=https://your-server.example.com
+
+# Optional — comma-separated label allowlist (defaults to "self-hosted").
+# Use a unique label per pool to partition multiple gharp deployments.
+# RUNNER_LABELS=self-hosted,gpu-pool
+
+# Optional — point at a GitHub Enterprise Server install.
+# GITHUB_API_BASE=https://gh.example.com/api/v3
+# GITHUB_WEB_BASE=https://gh.example.com
 ```
+
+> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
+> and OAuth-callback URLs at `/setup` time. Changing it later won't
+> reconfigure the App — gharp will log a `BASE_URL drift` warning at
+> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
+> `BASE_URL` to the original value.
+
 
 ### 3. Run
 
