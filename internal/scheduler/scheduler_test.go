@@ -44,6 +44,8 @@ type spyGH struct {
 	jwtCalls    atomic.Int64
 	instCalls   atomic.Int64
 	regCalls    atomic.Int64
+	jwtErr      error
+	instErr     error
 	regErr      error
 	callOrder   []string
 }
@@ -51,12 +53,18 @@ type spyGH struct {
 func (g *spyGH) AppJWT(pem []byte, appID int64) (string, error) {
 	g.jwtCalls.Add(1)
 	g.callOrder = append(g.callOrder, "AppJWT")
+	if g.jwtErr != nil {
+		return "", g.jwtErr
+	}
 	return "jwt", nil
 }
 
 func (g *spyGH) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error) {
 	g.instCalls.Add(1)
 	g.callOrder = append(g.callOrder, "InstallationToken")
+	if g.instErr != nil {
+		return "", g.instErr
+	}
 	return "inst-token", nil
 }
 
@@ -379,3 +387,333 @@ func drainChan(ch chan int64) []int64 {
 		}
 	}
 }
+
+// --- additional coverage -----------------------------------------------------
+
+// (1) Run loop: replays then drains channel; returns context.Canceled on stop.
+func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo") // replayed
+	seedPendingJob(t, st, 2, "owner/repo") // also replayed
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	// Make container/runner names unique per call so InsertRunner doesn't
+	// PK-conflict between the two dispatches.
+	var nameCounter atomic.Int64
+	s.nameFn = func(jobID int64) (string, string) {
+		n := nameCounter.Add(1)
+		name := "test-runner-" + itoa(n)
+		return name, name
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Wait until both replayed jobs have been dispatched. We poll on the
+	// launcher counter so the test is deterministic without sleeping.
+	deadline := time.Now().Add(2 * time.Second)
+	for ln.calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if ln.calls.Load() != 2 {
+		t.Fatalf("Launch calls after replay = %d, want 2", ln.calls.Load())
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v, want context.Canceled", err)
+	}
+}
+
+// (2) cap-backoff vs ctx cancel: ctx cancelled while sleeping → no re-enqueue.
+func TestDispatch_CapBackoffCancelled_NoRequeue(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	if err := st.InsertRunner(context.Background(), &store.Runner{
+		ContainerName: "preexisting",
+		Repo:          "owner/repo",
+		RunnerName:    "preexisting",
+		Labels:        "self-hosted",
+		Status:        "starting",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestScheduler(t, newCfg(1), st, &spyGH{}, &spyLauncher{})
+	s.capBackoff = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.dispatch(ctx, 1)
+		close(done)
+	}()
+	// Cancel mid-backoff.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := len(s.jobCh); got != 0 {
+		t.Fatalf("channel depth=%d, want 0 (ctx cancel must skip re-enqueue)", got)
+	}
+}
+
+// (3) GitHub three-stage failures: each layer's error must short-circuit.
+func TestDispatch_GitHubErrors_ShortCircuit(t *testing.T) {
+	cases := []struct {
+		name           string
+		mutate         func(g *spyGH)
+		wantInstCalled bool
+		wantRegCalled  bool
+	}{
+		{"AppJWT_fails", func(g *spyGH) { g.jwtErr = errors.New("jwt boom") }, false, false},
+		{"InstallationToken_fails", func(g *spyGH) { g.instErr = errors.New("inst boom") }, true, false},
+		{"RegistrationToken_fails", func(g *spyGH) { g.regErr = errors.New("reg boom") }, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStoreT(t)
+			seedAppConfig(t, st)
+			seedInstallation(t, st, 999, "owner/repo")
+			seedPendingJob(t, st, 1, "owner/repo")
+
+			gh := &spyGH{}
+			tc.mutate(gh)
+			ln := &spyLauncher{}
+			s := newTestScheduler(t, newCfg(4), st, gh, ln)
+
+			s.dispatch(context.Background(), 1)
+
+			if (gh.instCalls.Load() > 0) != tc.wantInstCalled {
+				t.Fatalf("InstallationToken called=%v, want=%v", gh.instCalls.Load() > 0, tc.wantInstCalled)
+			}
+			if (gh.regCalls.Load() > 0) != tc.wantRegCalled {
+				t.Fatalf("RegistrationToken called=%v, want=%v", gh.regCalls.Load() > 0, tc.wantRegCalled)
+			}
+			if ln.calls.Load() != 0 {
+				t.Fatalf("Launch called despite github error: %d", ln.calls.Load())
+			}
+			active, _ := st.ListActiveRunners(context.Background())
+			if len(active) != 0 {
+				t.Fatalf("active runners after github error = %d, want 0", len(active))
+			}
+		})
+	}
+}
+
+// (4) GetAppConfig returns nil → bail without minting.
+func TestDispatch_NoAppConfig_StaysPending(t *testing.T) {
+	st := newStoreT(t)
+	// Do NOT seed app config.
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+
+	s.dispatch(context.Background(), 1)
+
+	if gh.jwtCalls.Load() != 0 {
+		t.Fatalf("AppJWT called without app_config: %d", gh.jwtCalls.Load())
+	}
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch called without app_config: %d", ln.calls.Load())
+	}
+}
+
+// (5) InsertRunner conflict (PK collision) → no Launch.
+func TestDispatch_InsertRunnerConflict_NoLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	// Pre-occupy the container_name primary key the test nameFn will produce.
+	if err := st.InsertRunner(context.Background(), &store.Runner{
+		ContainerName: "test-runner",
+		Repo:          "owner/repo",
+		RunnerName:    "test-runner",
+		Labels:        "self-hosted",
+		Status:        "finished", // not active, so cap check still passes
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch called despite InsertRunner conflict: %d", ln.calls.Load())
+	}
+}
+
+// (6) Channel-full re-enqueue logs warn but does not panic; job still in
+// sqlite as pending.
+func TestDispatch_CapRequeueWhenChannelFull(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	// One active runner = at cap (cfg=1).
+	if err := st.InsertRunner(context.Background(), &store.Runner{
+		ContainerName: "preexisting", Repo: "owner/repo",
+		RunnerName: "preexisting", Labels: "x", Status: "starting",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestScheduler(t, newCfg(1), st, &spyGH{}, &spyLauncher{})
+	// Saturate the channel so the cap-path Enqueue takes the default branch.
+	for i := 0; i < cap(s.jobCh); i++ {
+		s.jobCh <- int64(1000 + i)
+	}
+
+	s.dispatch(context.Background(), 1)
+
+	// Job 1 stays pending in sqlite; the dropped Enqueue is recoverable on
+	// next replay.
+	job, _ := st.GetJob(context.Background(), 1)
+	if job == nil || job.Status != "pending" {
+		t.Fatalf("job status=%v, want pending", job)
+	}
+}
+
+// (7) PendingJobs error → replay logs and returns; no panic.
+func TestReplay_StoreErrorDoesNotPanic(t *testing.T) {
+	s := newTestScheduler(t, newCfg(4), &errStore{pendingErr: errors.New("db down")}, &spyGH{}, &spyLauncher{})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("replay panicked: %v", r)
+		}
+	}()
+	s.replay(context.Background())
+	if got := len(s.jobCh); got != 0 {
+		t.Fatalf("channel depth=%d, want 0 on PendingJobs error", got)
+	}
+}
+
+// (8) Labels: cfg.RunnerLabels populated → joined and used as the runners.row
+// labels and the Launch spec labels.
+func TestDispatch_LabelsFromConfigJoined(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	cfg := newCfg(4)
+	cfg.RunnerLabels = []string{"self-hosted", "linux", "x64"}
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, cfg, st, gh, ln)
+
+	s.dispatch(context.Background(), 1)
+
+	wantLabels := "self-hosted,linux,x64"
+	if ln.lastSpec.Labels != wantLabels {
+		t.Fatalf("Launch spec.Labels=%q, want %q", ln.lastSpec.Labels, wantLabels)
+	}
+	active, _ := st.ListActiveRunners(context.Background())
+	if len(active) != 1 || active[0].Labels != wantLabels {
+		t.Fatalf("runners.labels=%q, want %q (rows=%+v)", active[0].Labels, wantLabels, active)
+	}
+}
+
+// (8b) Labels: cfg.RunnerLabels empty → falls back to job.Labels.
+func TestDispatch_LabelsFallbackToJobLabels(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo") // job.Labels = "self-hosted"
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+
+	s.dispatch(context.Background(), 1)
+
+	if ln.lastSpec.Labels != "self-hosted" {
+		t.Fatalf("Launch spec.Labels=%q, want %q (job.Labels fallback)", ln.lastSpec.Labels, "self-hosted")
+	}
+}
+
+// (9) Concurrent dispatch of same jobID: only one Launch wins (PK guard on
+// runners.container_name keeps the second from launching).
+func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	// Both goroutines must produce the SAME container_name so the PK
+	// collision exposes any missing serialization.
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.nameFn = func(jobID int64) (string, string) {
+		// Identical name across calls is the whole point.
+		return "shared-runner", "shared-runner"
+	}
+
+	done := make(chan struct{}, 2)
+	for range 2 {
+		go func() { s.dispatch(context.Background(), 1); done <- struct{}{} }()
+	}
+	<-done
+	<-done
+
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls = %d, want exactly 1 under concurrent dispatch of same jobID", got)
+	}
+	active, _ := st.ListActiveRunners(context.Background())
+	if len(active) != 1 {
+		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// errStore is a minimal store.Store stub used to inject failures the real
+// SQLite store can't easily produce.
+type errStore struct {
+	pendingErr error
+}
+
+func (e *errStore) PendingJobs(ctx context.Context) ([]*store.Job, error) {
+	return nil, e.pendingErr
+}
+
+// All other Store methods are unused by the tests that touch errStore;
+// they panic if exercised so an accidental call surfaces loudly.
+func (e *errStore) SaveAppConfig(context.Context, *store.AppConfig) error { panic("unused") }
+func (e *errStore) GetAppConfig(context.Context) (*store.AppConfig, error) { panic("unused") }
+func (e *errStore) UpsertInstallation(context.Context, *store.Installation) error { panic("unused") }
+func (e *errStore) ListInstallations(context.Context) ([]*store.Installation, error) { panic("unused") }
+func (e *errStore) UpsertRepoInstallation(context.Context, string, int64) error { panic("unused") }
+func (e *errStore) RemoveRepoInstallation(context.Context, string) error { panic("unused") }
+func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installation, error) {
+	panic("unused")
+}
+func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
+func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
+func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) error {
+	panic("unused")
+}
+func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
+func (e *errStore) InsertRunner(context.Context, *store.Runner) error     { panic("unused") }
+func (e *errStore) UpdateRunnerStatus(context.Context, string, string) error {
+	panic("unused")
+}
+func (e *errStore) UpdateRunnerStatusByName(context.Context, string, string) error {
+	panic("unused")
+}
+func (e *errStore) ActiveRunnerCount(context.Context) (int, error)      { panic("unused") }
+func (e *errStore) ListActiveRunners(context.Context) ([]*store.Runner, error) { panic("unused") }
+func (e *errStore) Close() error                                        { return nil }
