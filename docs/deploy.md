@@ -42,9 +42,12 @@ uses.
 
 ## 2. Provide a public HTTPS URL
 
-GitHub needs to POST webhooks to `${BASE_URL}/github/webhook`. Pick one:
+GitHub needs to POST webhooks to `${BASE_URL}/github/webhook`. Pick
+based on whether the URL needs to survive restarts.
 
-### Cloudflare Tunnel (recommended for production)
+### Production — stable hostname
+
+#### Cloudflare Tunnel (named, with DNS)
 
 ```bash
 cloudflared tunnel create gharp
@@ -53,22 +56,40 @@ cloudflared tunnel route dns gharp gharp.example.com
 cloudflared tunnel run gharp
 ```
 
-Then `BASE_URL=https://gharp.example.com`.
+`BASE_URL=https://gharp.example.com`. Stable across restarts; survives
+container/host reboots.
 
-### ngrok (fastest for dev)
+#### Tailscale Funnel
+
+Expose port 8080 via `tailscale serve` + `tailscale funnel`. The
+hostname is your tailnet's MagicDNS name and is stable.
+
+#### Cloud-hosted (VPS, EC2, Hetzner, etc.)
+
+Run gharp on a public host with TLS terminated by Caddy / nginx /
+Traefik in front, and point `BASE_URL` at the public DNS name. No
+tunnel needed.
+
+### Local dev — ephemeral hostname
+
+These give you a public URL in seconds but the hostname changes every
+restart. Each change requires re-running `/setup` (fresh GitHub App)
+because `BASE_URL` is sticky — see "BASE_URL drift" in
+[`configuration.md`](configuration.md).
+
+#### Cloudflare quick tunnel
+
+```bash
+cloudflared tunnel --url http://localhost:8080
+# Prints a https://<random>.trycloudflare.com URL.
+```
+
+#### ngrok
 
 ```bash
 ngrok http 8080
 # Note the https://<random>.ngrok-free.app URL.
 ```
-
-Set `BASE_URL` to that URL. Note that the ngrok URL changes each restart
-on the free tier — if it changes, you'll need to re-run `/setup` (see
-"BASE_URL drift" in `configuration.md`).
-
-### Tailscale Funnel
-
-Works the same way; expose port 8080 and use the Funnel hostname.
 
 ## 3. Boot the stack
 
