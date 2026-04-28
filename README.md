@@ -26,8 +26,7 @@ docker run -d --name gharp \
 ```
 
 `BASE_URL` must be a public HTTPS URL GitHub can reach. See
-[`docs/configuration.md`](docs/configuration.md) for the full env-var
-reference (labels, GHES base, runner image, etc.).
+[`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
 
 ### 2. Create the GitHub App
 
@@ -71,9 +70,8 @@ jobs:
 Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
 (default `self-hosted`) will get a fresh runner.
 
-For production deployments (compose, Cloudflare Tunnel / ngrok /
-Tailscale Funnel, volumes, upgrades, troubleshooting, from-source
-build), see [`docs/deploy.md`](docs/deploy.md).
+For production deployments (from-source build, docker compose, volumes,
+upgrades, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
 
 ## 🤔 Why?
 
@@ -99,10 +97,21 @@ This makes it hard to:
 
 ```mermaid
 flowchart LR
-    GH[GitHub] -- workflow_job webhook --> G[gharp]
-    G -- docker run --> R[ephemeral runner]
-    R -- one job, then exit --> X((removed))
-    R -- runs the job --> GH
+    subgraph setup["One-time setup (/setup)"]
+        U[User] -- POST manifest --> GH1[GitHub]
+        GH1 -- code + slug --> G1[gharp]
+        G1 -- App credentials --> DB[(sqlite)]
+        U -- install App --> GH1
+    end
+
+    subgraph runtime["Per-job runtime"]
+        GH2[GitHub] -- workflow_job webhook --> G2[gharp]
+        G2 -- record job --> DB2[(sqlite)]
+        G2 -- registration token --> GH2
+        G2 -- docker run --> R[ephemeral runner]
+        R -- runs the job --> GH2
+        R -- one job, then exit --> X((removed))
+    end
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design,
