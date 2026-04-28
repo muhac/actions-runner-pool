@@ -41,7 +41,12 @@ func BuildManifest(baseURL string) Manifest {
 			"actions":        "read",
 			"metadata":       "read",
 		},
-		DefaultEvents: []string{"workflow_job", "installation", "installation_repositories"},
+		// installation / installation_repositories are NOT listed here:
+		// GitHub treats them as built-in App lifecycle events that fire
+		// automatically once the App is installed. Including them makes
+		// the manifest fail validation ("Default events unsupported").
+		// They still arrive at our webhook and we still handle them.
+		DefaultEvents: []string{"workflow_job"},
 	}
 }
 
