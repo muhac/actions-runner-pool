@@ -6,6 +6,7 @@
   <style>
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
     a.button { display: inline-block; padding: 0.6em 1.2em; background: #2da44e; color: white; text-decoration: none; border-radius: 6px; }
+    .hint { color: #666; font-size: 0.85rem; margin-top: 1.5rem; }
   </style>
 </head>
 <body>
@@ -13,5 +14,8 @@
   <p>The GitHub App <strong>{{.Slug}}</strong> has been registered.
      Now install it on the account/repos you want gharp to serve.</p>
   <p><a class="button" href="{{.InstallURL}}">Install on GitHub</a></p>
+  <p class="hint">Tip: keep the auto-generated name. Renaming on GitHub
+     changes the App slug, which can break this install link
+     (gharp itself keeps working — only this shortcut becomes stale).</p>
 </body>
 </html>
