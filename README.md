@@ -2,7 +2,9 @@
 
 **Ephemeral autoscaling GitHub Actions runners for multiple repositories and personal accounts (Docker-based, no Kubernetes).**
 
-Run a single self-hosted runner across multiple repositories — even under a personal account — with clean, ephemeral environments for every job.
+Pool one host's compute across many repositories — even under a personal
+account where GitHub doesn't natively support shared runners — by
+launching a fresh ephemeral container for every job.
 
 ## ✨ Features
 
