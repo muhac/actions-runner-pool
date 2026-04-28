@@ -76,7 +76,7 @@ Tables (initial cut):
 
 - **`app_config`** — App ID, webhook secret, private key, BASE_URL. One row.
 - **`installations`** — installation ID, account login, account type, scope.
-- **`jobs`** — workflow_job ID, repo full name, action (queued/in_progress/completed), labels, dedupe key, received_at, status.
+- **`jobs`** — workflow_job ID, repo full name, action (queued/in_progress/completed), labels, dedupe key, received_at, status. The status state machine is `pending` → `dispatched` (gharp launched a runner; GitHub hasn't bound it yet) → `in_progress` (real `workflow_job: in_progress` webhook with non-empty `runner_name`) → `completed`. The `dispatched` placeholder lets the scheduler's replay loop rescue jobs whose runner lost the assignment race.
 - **`runners`** — container name, repo full name, runner name, labels, status, started_at, finished_at.
 
 ### 4. Ephemeral, per-job containers
@@ -227,9 +227,11 @@ This means:
 
 | action | what we do | why |
 |---|---|---|
-| `queued` | enqueue + spawn runner (the hot path above) | the trigger |
-| `in_progress` | `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` and `UPDATE runners SET status='busy'` matching by `runner_name` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
+| `queued` | enqueue + spawn runner (the hot path above), then `MarkJobDispatched` flips `pending → dispatched` | the trigger; the placeholder distinguishes "runner launched, awaiting binding" from a real binding |
+| `in_progress` | if `runner_name == ""`, **drop the event** (a dispatch race we lost — see below); otherwise `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` (only if currently `pending`/`dispatched`) and `UPDATE runners SET status='busy'` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
 | `completed` | `UPDATE jobs SET status='completed', conclusion=?` and `UPDATE runners SET status='finished', finished_at=?`. Container is already `--rm`-ing itself. | bookkeeping; no new docker action |
+
+The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched` and `PendingJobs` re-enqueues it after `dispatchedReplayAge` (currently 5 min).
 
 #### Ghost runners and reconciliation
 
