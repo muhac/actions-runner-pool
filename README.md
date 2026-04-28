@@ -54,33 +54,25 @@ GitHub → webhook → pool server → docker run → runner → job → exit
 
 ## 🚀 Quick Start
 
-### 1. Clone
+Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
 
 ```bash
-git clone https://github.com/<yourname>/actions-runner-pool
+git clone https://github.com/muhac/actions-runner-pool
 cd actions-runner-pool
-```
-
-### 2. Configure
-
-```bash
 cp .env.example .env
+
+# Set BASE_URL to a public HTTPS URL that GitHub can reach.
+# (Cloudflare Tunnel / ngrok / Tailscale Funnel — see docs/deploy.md.)
+$EDITOR .env
+
+docker compose up -d
 ```
 
-Edit `.env`:
+Then open `${BASE_URL}/setup`, click **Create GitHub App**, and install
+the App on the repos you want runners for.
 
-```env
-PORT=8080
-BASE_URL=https://your-server.example.com
-
-# Optional — comma-separated label allowlist (defaults to "self-hosted").
-# Use a unique label per pool to partition multiple gharp deployments.
-# RUNNER_LABELS=self-hosted,gpu-pool
-
-# Optional — point at a GitHub Enterprise Server install.
-# GITHUB_API_BASE=https://gh.example.com/api/v3
-# GITHUB_WEB_BASE=https://gh.example.com
-```
+That's it — every `workflow_job` whose `runs-on` set intersects
+`RUNNER_LABELS` (default `self-hosted`) will get a fresh runner.
 
 > ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
 > and OAuth-callback URLs at `/setup` time. Changing it later won't
@@ -88,26 +80,14 @@ BASE_URL=https://your-server.example.com
 > startup. To migrate, re-run `/setup` (creating a fresh App) or revert
 > `BASE_URL` to the original value.
 
+📖 More:
 
-### 3. Run
-
-```bash
-docker compose up -d
-```
-
-### 4. Open setup page
-
-```text
-http://localhost:8080/setup
-```
-
-👉 Click **"Create GitHub App"**
-
-### 5. Done
-
-* App is created
-* Webhook configured
-* Credentials stored locally
+- **[`docs/deploy.md`](docs/deploy.md)** — full deployment walkthrough
+  (Cloudflare Tunnel, volumes, upgrades, troubleshooting).
+- **[`docs/configuration.md`](docs/configuration.md)** — every env
+  variable, default, and validation rule.
+- **[`docs/architecture.md`](docs/architecture.md)** — design decisions
+  and invariants.
 
 ## ⚙️ GitHub App Setup (What happens under the hood)
 
@@ -135,7 +115,7 @@ In your repository:
 ```yaml
 jobs:
   build:
-    runs-on: [self-hosted, ephemeral]
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
       - run: echo "hello from ephemeral runner"
