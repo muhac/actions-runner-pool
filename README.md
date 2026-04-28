@@ -13,6 +13,44 @@ Run a single self-hosted runner across multiple repositories — even under a pe
 * 🐳 **Docker-based** — simple, no Kubernetes required
 * 🔐 **Self-hosted** — no external service dependency
 
+## 🚀 Quick Start
+
+Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
+
+```bash
+docker run -d --name gharp \
+  -p 8080:8080 \
+  -e BASE_URL=https://gharp.example.com \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v gharp-data:/data \
+  -v /tmp/gharp:/tmp/gharp \
+  muhac/gharp:latest
+```
+
+Then open `${BASE_URL}/setup`, click **Create GitHub App**, and install
+the App on the repos you want runners for. Every `workflow_job` whose
+`runs-on` set intersects `RUNNER_LABELS` (default `self-hosted`) will
+get a fresh runner.
+
+`BASE_URL` must be a public HTTPS URL GitHub can reach — see
+[`docs/deploy.md`](docs/deploy.md) for Cloudflare Tunnel / ngrok /
+Tailscale Funnel walkthroughs and a from-source build.
+
+> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
+> and OAuth-callback URLs at `/setup` time. Changing it later won't
+> reconfigure the App — gharp will log a `BASE_URL drift` warning at
+> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
+> `BASE_URL` to the original value.
+
+📖 More:
+
+- **[`docs/deploy.md`](docs/deploy.md)** — production deployment
+  (compose, public URL, volumes, upgrades, troubleshooting).
+- **[`docs/configuration.md`](docs/configuration.md)** — every env
+  variable, default, and validation rule.
+- **[`docs/architecture.md`](docs/architecture.md)** — design decisions
+  and invariants.
+
 ## 🤔 Why?
 
 GitHub does **not support "user-level" runners**.
@@ -51,44 +89,6 @@ GitHub → webhook → pool server → docker run → runner → job → exit
 * Starts a runner container (`EPHEMERAL=1`)
 * Runner executes job
 * Container exits and is removed
-
-## 🚀 Quick Start
-
-Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
-
-```bash
-docker run -d --name gharp \
-  -p 8080:8080 \
-  -e BASE_URL=https://gharp.example.com \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v gharp-data:/data \
-  -v /tmp/gharp:/tmp/gharp \
-  muhac/gharp:latest
-```
-
-Then open `${BASE_URL}/setup`, click **Create GitHub App**, and install
-the App on the repos you want runners for. Every `workflow_job` whose
-`runs-on` set intersects `RUNNER_LABELS` (default `self-hosted`) will
-get a fresh runner.
-
-`BASE_URL` must be a public HTTPS URL GitHub can reach — see
-[`docs/deploy.md`](docs/deploy.md) for Cloudflare Tunnel / ngrok /
-Tailscale Funnel walkthroughs and a from-source build.
-
-> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
-> and OAuth-callback URLs at `/setup` time. Changing it later won't
-> reconfigure the App — gharp will log a `BASE_URL drift` warning at
-> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
-> `BASE_URL` to the original value.
-
-📖 More:
-
-- **[`docs/deploy.md`](docs/deploy.md)** — production deployment
-  (compose, public URL, volumes, upgrades, troubleshooting).
-- **[`docs/configuration.md`](docs/configuration.md)** — every env
-  variable, default, and validation rule.
-- **[`docs/architecture.md`](docs/architecture.md)** — design decisions
-  and invariants.
 
 ## ⚙️ GitHub App Setup (What happens under the hood)
 
