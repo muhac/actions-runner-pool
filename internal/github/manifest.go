@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,7 +31,11 @@ type AppCredentials struct {
 
 func BuildManifest(baseURL string) Manifest {
 	return Manifest{
-		Name: "gharp-runners",
+		// GitHub App names are globally unique; suffix the BaseURL hash so
+		// two unrelated gharp deployments don't collide. Users can rename
+		// in the GitHub UI; the slug returned by ConvertCode is what we
+		// actually use afterwards.
+		Name: "gharp-" + nameSuffix(baseURL),
 		URL:  baseURL,
 		HookAttributes: map[string]string{
 			"url": baseURL + "/github/webhook",
@@ -41,8 +47,20 @@ func BuildManifest(baseURL string) Manifest {
 			"actions":        "read",
 			"metadata":       "read",
 		},
-		DefaultEvents: []string{"workflow_job", "installation", "installation_repositories"},
+		// installation / installation_repositories are NOT listed here:
+		// GitHub treats them as built-in App lifecycle events that fire
+		// automatically once the App is installed. Including them makes
+		// the manifest fail validation ("Default events unsupported").
+		// They still arrive at our webhook and we still handle them.
+		DefaultEvents: []string{"workflow_job"},
 	}
+}
+
+// nameSuffix returns the first 6 hex chars of sha256(baseURL) — short enough
+// to keep the App name readable and unique enough to not collide.
+func nameSuffix(baseURL string) string {
+	h := sha256.Sum256([]byte(baseURL))
+	return hex.EncodeToString(h[:])[:6]
 }
 
 // ConvertCode exchanges the temporary `code` from the manifest flow callback

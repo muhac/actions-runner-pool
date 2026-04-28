@@ -21,6 +21,24 @@ func TestBuildManifest_FieldsFromBaseURL(t *testing.T) {
 	}
 }
 
+func TestBuildManifest_NameDeterministicAndSuffixed(t *testing.T) {
+	m1 := BuildManifest("https://a.example.test")
+	m2 := BuildManifest("https://a.example.test")
+	m3 := BuildManifest("https://b.example.test")
+	if m1.Name != m2.Name {
+		t.Errorf("same BaseURL should produce same name: %q vs %q", m1.Name, m2.Name)
+	}
+	if m1.Name == m3.Name {
+		t.Errorf("different BaseURLs should produce different names: %q == %q", m1.Name, m3.Name)
+	}
+	if !strings.HasPrefix(m1.Name, "gharp-") {
+		t.Errorf("name must start with gharp-, got %q", m1.Name)
+	}
+	if len(m1.Name) != len("gharp-")+6 {
+		t.Errorf("name suffix should be 6 chars, got %q", m1.Name)
+	}
+}
+
 func TestConvertCode_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/app-manifests/") || !strings.HasSuffix(r.URL.Path, "/conversions") {

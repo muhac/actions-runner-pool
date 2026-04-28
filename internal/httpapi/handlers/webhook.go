@@ -1,26 +1,279 @@
 package handlers
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
 	"github.com/muhac/actions-runner-pool/internal/scheduler"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
+// jobEnqueuer is the subset of *scheduler.Scheduler the webhook needs;
+// extracted as an interface so tests can pass a spy.
+type jobEnqueuer interface {
+	Enqueue(jobID int64)
+}
+
 type WebhookHandler struct {
 	Cfg       *config.Config
 	Store     store.Store
-	Scheduler *scheduler.Scheduler
+	Scheduler jobEnqueuer
 	Log       *slog.Logger
 }
 
+// maxWebhookBodyBytes caps how much we'll read from a webhook request before
+// authentication. GitHub's largest documented payload is well under 1MB; this
+// is generous-but-bounded so an unauthenticated caller can't OOM us.
+const maxWebhookBodyBytes = 1 << 20 // 1 MiB
+
 // POST /github/webhook
-// 1. Read raw body, verify X-Hub-Signature-256 against app_config.WebhookSecret.
-// 2. Switch on X-GitHub-Event: workflow_job, installation, installation_repositories.
-// 3. For workflow_job:queued — InsertJobIfNew, then Scheduler.Enqueue.
-// 4. Always return 200 fast.
+//
+// 200 on success, 401 on bad signature, 400 on bad body, 413 on oversize body,
+// 5xx ONLY on the queued path when the store fails (so GitHub retries; the
+// INSERT-OR-IGNORE dedupe makes retry safe). Bookkeeping store errors on
+// in_progress / completed are logged and swallowed to keep GitHub from
+// retry-storming us.
 func (h *WebhookHandler) Post(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "webhook not yet implemented", http.StatusNotImplemented)
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	defer func() { _ = r.Body.Close() }()
+
+	cfg, err := h.Store.GetAppConfig(r.Context())
+	if err != nil {
+		h.logError("load app config for webhook", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if cfg == nil {
+		http.Error(w, "app not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !verifySignature(cfg.WebhookSecret, body, r.Header.Get("X-Hub-Signature-256")) {
+		http.Error(w, "bad signature", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Header.Get("X-GitHub-Event") {
+	case "ping":
+		w.WriteHeader(http.StatusOK)
+	case "installation":
+		h.handleInstallation(w, r, body)
+	case "installation_repositories":
+		h.handleInstallationRepositories(w, r, body)
+	case "workflow_job":
+		h.handleWorkflowJob(w, r, body)
+	default:
+		// Quietly accept events we did not subscribe to (defensive).
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// ---------------- HMAC ----------------
+
+func verifySignature(secret string, body []byte, header string) bool {
+	// An empty secret would happily verify a forged HMAC. Treat it as a
+	// fatal misconfiguration — no webhook is "anyone can post".
+	if secret == "" {
+		return false
+	}
+	if !strings.HasPrefix(header, "sha256=") {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(header), []byte(expected))
+}
+
+// ---------------- installation ----------------
+
+type installationEvent struct {
+	Action       string `json:"action"`
+	Installation struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"account"`
+	} `json:"installation"`
+	Repositories []struct {
+		FullName string `json:"full_name"`
+	} `json:"repositories"`
+}
+
+func (h *WebhookHandler) handleInstallation(w http.ResponseWriter, r *http.Request, body []byte) {
+	var ev installationEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		http.Error(w, "decode installation event", http.StatusBadRequest)
+		return
+	}
+
+	switch ev.Action {
+	case "created":
+		if err := h.Store.UpsertInstallation(r.Context(), &store.Installation{
+			ID:           ev.Installation.ID,
+			AccountID:    ev.Installation.Account.ID,
+			AccountLogin: ev.Installation.Account.Login,
+			AccountType:  ev.Installation.Account.Type,
+		}); err != nil {
+			h.logError("upsert installation", err)
+		}
+		for _, repo := range ev.Repositories {
+			if err := h.Store.UpsertRepoInstallation(r.Context(), repo.FullName, ev.Installation.ID); err != nil {
+				h.logError("upsert repo->installation", err)
+			}
+		}
+	case "deleted":
+		if h.Log != nil {
+			h.Log.Info("installation deleted (not removing rows in v1)", "installation_id", ev.Installation.ID)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// ---------------- installation_repositories ----------------
+
+type installationRepositoriesEvent struct {
+	Action       string `json:"action"` // added | removed
+	Installation struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
+	RepositoriesAdded []struct {
+		FullName string `json:"full_name"`
+	} `json:"repositories_added"`
+	RepositoriesRemoved []struct {
+		FullName string `json:"full_name"`
+	} `json:"repositories_removed"`
+}
+
+func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r *http.Request, body []byte) {
+	var ev installationRepositoriesEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		http.Error(w, "decode installation_repositories event", http.StatusBadRequest)
+		return
+	}
+	for _, repo := range ev.RepositoriesAdded {
+		if err := h.Store.UpsertRepoInstallation(r.Context(), repo.FullName, ev.Installation.ID); err != nil {
+			h.logError("upsert repo->installation", err)
+		}
+	}
+	for _, repo := range ev.RepositoriesRemoved {
+		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
+			h.logError("remove repo->installation", err)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// ---------------- workflow_job ----------------
+
+func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Request, body []byte) {
+	var ev scheduler.WorkflowJobEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		http.Error(w, "decode workflow_job event", http.StatusBadRequest)
+		return
+	}
+
+	if !labelsMatch(ev.WorkflowJob.Labels, h.Cfg.RunnerLabels) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	switch ev.Action {
+	case "queued":
+		// Lazy-write the repo->installation mapping in case we missed the
+		// installation event (resilience per components.md).
+		if ev.Installation.ID != 0 && ev.Repository.FullName != "" {
+			if err := h.Store.UpsertRepoInstallation(r.Context(), ev.Repository.FullName, ev.Installation.ID); err != nil {
+				h.logError("lazy upsert repo->installation", err)
+			}
+		}
+
+		job := &store.Job{
+			ID:        ev.WorkflowJob.ID,
+			Repo:      ev.Repository.FullName,
+			Action:    "queued",
+			Labels:    strings.Join(ev.WorkflowJob.Labels, ","),
+			DedupeKey: strconv.FormatInt(ev.WorkflowJob.ID, 10),
+			Status:    "pending",
+		}
+		inserted, err := h.Store.InsertJobIfNew(r.Context(), job)
+		if err != nil {
+			h.logError("insert job", err)
+			http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if inserted {
+			h.Scheduler.Enqueue(job.ID)
+		}
+		w.WriteHeader(http.StatusOK)
+
+	case "in_progress":
+		if err := h.Store.MarkJobInProgress(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.RunnerID, ev.WorkflowJob.RunnerName); err != nil {
+			h.logError("mark job in_progress", err)
+		}
+		if ev.WorkflowJob.RunnerName != "" {
+			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "busy"); err != nil {
+				h.logError("update runner status busy", err)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+
+	case "completed":
+		if err := h.Store.MarkJobCompleted(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.Conclusion); err != nil {
+			h.logError("mark job completed", err)
+		}
+		if ev.WorkflowJob.RunnerName != "" {
+			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "finished"); err != nil {
+				h.logError("update runner status finished", err)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// labelsMatch returns true if any of the runs-on labels intersects the
+// configured RunnerLabels. An unset configured set means "serve everything".
+func labelsMatch(runsOn, configured []string) bool {
+	if len(configured) == 0 {
+		return true
+	}
+	want := make(map[string]struct{}, len(configured))
+	for _, l := range configured {
+		want[l] = struct{}{}
+	}
+	for _, l := range runsOn {
+		if _, ok := want[l]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *WebhookHandler) logError(msg string, err error) {
+	if h.Log != nil {
+		h.Log.Error(msg, "error", err)
+	}
 }

@@ -234,6 +234,60 @@ func TestLoad_GitHubAPIBaseInvalid(t *testing.T) {
 	}
 }
 
+func TestLoad_BaseURLTrailingSlashStripped(t *testing.T) {
+	withEnv(t, map[string]string{"BASE_URL": "https://example.test/"}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.BaseURL != "https://example.test" {
+			t.Errorf("BaseURL = %q, want trailing slash stripped", c.BaseURL)
+		}
+	})
+}
+
+func TestLoad_RunnerLabels(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want []string
+	}{
+		{"unset-nil", "", nil},
+		{"single", "self-hosted", []string{"self-hosted"}},
+		{"multi-with-spaces", "self-hosted, gpu , linux", []string{"self-hosted", "gpu", "linux"}},
+		{"empty-segments-skipped", ",,foo,,bar,", []string{"foo", "bar"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"BASE_URL": "https://example.test"}
+			if tc.set != "" {
+				env["RUNNER_LABELS"] = tc.set
+			}
+			withEnv(t, env, func() {
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if !equalStrings(c.RunnerLabels, tc.want) {
+					t.Errorf("RunnerLabels = %v, want %v", c.RunnerLabels, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // helper: serialize a []string as JSON without bringing in a dep.
 func jsonStringArray(t *testing.T, parts []string) string {
 	t.Helper()

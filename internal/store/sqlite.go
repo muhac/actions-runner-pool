@@ -28,6 +28,13 @@ func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 	// every connection in database/sql's pool gets it (a one-shot
 	// `PRAGMA foreign_keys = ON` would only stick on a single connection).
 	dsn = ensureDSNPragma(dsn, "foreign_keys", "1")
+	// busy_timeout makes sqlite wait (rather than immediately returning
+	// SQLITE_BUSY) when another writer holds the lock. 5s is generous —
+	// concurrent webhook bookkeeping was hitting this in practice.
+	dsn = ensureDSNPragma(dsn, "busy_timeout", "5000")
+	// WAL improves read/write concurrency; if the user already set it via
+	// STORE_DSN this is a no-op.
+	dsn = ensureDSNPragma(dsn, "journal_mode", "WAL")
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite (%s): %w", dsn, err)
