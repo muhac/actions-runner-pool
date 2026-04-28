@@ -264,14 +264,14 @@ func TestDispatch_HappyPath_InsertsStartingRunnerAndLaunches(t *testing.T) {
 	}
 
 	// Job must be advanced past 'pending' so a restart's replay won't
-	// re-dispatch it. Sentinel runner_id=0 / runner_name="" since GitHub
-	// hasn't told us which runner won the binding yet.
+	// re-dispatch it. Binding stays 0/"" because the webhook hasn't
+	// landed yet — those columns are written later by MarkJobInProgress.
 	job, _ := st.GetJob(context.Background(), 1)
 	if job == nil || job.Status != "in_progress" {
-		t.Fatalf("job status=%v, want in_progress (sentinel) after launch", job)
+		t.Fatalf("job status=%v, want in_progress after launch", job)
 	}
 	if job.RunnerID != 0 || job.RunnerName != "" {
-		t.Fatalf("job binding=%d/%q, want sentinels 0/\"\"", job.RunnerID, job.RunnerName)
+		t.Fatalf("job binding=%d/%q, want unset 0/\"\" before webhook", job.RunnerID, job.RunnerName)
 	}
 }
 
@@ -732,6 +732,7 @@ func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installa
 }
 func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
 func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
+func (e *errStore) MarkJobDispatched(context.Context, int64) error            { panic("unused") }
 func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) error {
 	panic("unused")
 }

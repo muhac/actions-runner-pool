@@ -15,6 +15,10 @@ type Store interface {
 
 	InsertJobIfNew(ctx context.Context, j *Job) (inserted bool, err error)
 	GetJob(ctx context.Context, jobID int64) (*Job, error)
+	// MarkJobDispatched advances a job from pending to in_progress with no
+	// runner binding. Conditional on status='pending' so it cannot
+	// overwrite a real binding written by a concurrent webhook.
+	MarkJobDispatched(ctx context.Context, jobID int64) error
 	MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) error
 	MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error
 	PendingJobs(ctx context.Context) ([]*Job, error)

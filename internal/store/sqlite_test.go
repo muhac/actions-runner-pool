@@ -161,6 +161,54 @@ func TestMarkJobInProgressThenCompleted(t *testing.T) {
 	}
 }
 
+func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	j := &Job{ID: 8, Repo: "a/b", Action: "queued", Labels: "x",
+		DedupeKey: "8", Status: "pending"}
+	if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MarkJobDispatched(ctx, 8); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetJob(ctx, 8)
+	if got.Status != "in_progress" {
+		t.Fatalf("after dispatch: status=%s, want in_progress", got.Status)
+	}
+	if got.RunnerID != 0 || got.RunnerName != "" {
+		t.Fatalf("dispatch must not touch binding: id=%d name=%q", got.RunnerID, got.RunnerName)
+	}
+
+	// Webhook lands later with the real binding — unconditional UPDATE wins.
+	if err := s.MarkJobInProgress(ctx, 8, 555, "runner-8"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetJob(ctx, 8)
+	if got.RunnerID != 555 || got.RunnerName != "runner-8" {
+		t.Fatalf("real binding lost: %+v", got)
+	}
+
+	// Now: webhook arrived FIRST (real binding), dispatch's
+	// MarkJobDispatched fires after — it must NOT clobber.
+	j2 := &Job{ID: 9, Repo: "a/b", Action: "queued", Labels: "x",
+		DedupeKey: "9", Status: "pending"}
+	if _, err := s.InsertJobIfNew(ctx, j2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkJobInProgress(ctx, 9, 777, "runner-9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkJobDispatched(ctx, 9); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetJob(ctx, 9)
+	if got.RunnerID != 777 || got.RunnerName != "runner-9" {
+		t.Fatalf("MarkJobDispatched clobbered real binding: %+v", got)
+	}
+}
+
 func TestPendingJobs_Order(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

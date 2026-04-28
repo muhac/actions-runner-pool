@@ -95,6 +95,11 @@ func (f *fakeStore) InsertJobIfNew(_ context.Context, j *store.Job) (bool, error
 	return true, nil
 }
 
+func (f *fakeStore) MarkJobDispatched(_ context.Context, jobID int64) error {
+	f.markedInProgress = append(f.markedInProgress, markedInProgress{jobID, 0, ""})
+	return nil
+}
+
 func (f *fakeStore) MarkJobInProgress(_ context.Context, jobID, runnerID int64, runnerName string) error {
 	f.markedInProgress = append(f.markedInProgress, markedInProgress{jobID, runnerID, runnerName})
 	return nil

@@ -193,12 +193,12 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	// Advance the job past 'pending' so a restart's PendingJobs replay
-	// won't re-dispatch it. We don't yet know which runner GitHub will
-	// pick (workflow_job: in_progress carries that), so use sentinel
-	// runner_id=0 / runner_name="" — the real values land later.
-	if err := s.store.MarkJobInProgress(ctx, jobID, 0, ""); err != nil {
-		s.log.Error("dispatch: MarkJobInProgress(sentinel) after launch failed", "job_id", jobID, "err", err)
+	// Advance the job out of 'pending' so a restart's PendingJobs replay
+	// won't re-dispatch it. Conditional on status='pending' so we can't
+	// race with the webhook's `workflow_job: in_progress` (which would
+	// already have written the real runner binding).
+	if err := s.store.MarkJobDispatched(ctx, jobID); err != nil {
+		s.log.Error("dispatch: MarkJobDispatched after launch failed", "job_id", jobID, "err", err)
 	}
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
 }
