@@ -96,8 +96,9 @@ This makes it hard to:
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph setup["One-time setup (/setup)"]
+        direction LR
         U[User] -- POST manifest --> GH1[GitHub]
         GH1 -- code + slug --> G1[gharp]
         G1 -- App credentials --> DB[(sqlite)]
@@ -105,6 +106,7 @@ flowchart LR
     end
 
     subgraph runtime["Per-job runtime"]
+        direction LR
         GH2[GitHub] -- workflow_job webhook --> G2[gharp]
         G2 -- record job --> DB2[(sqlite)]
         G2 -- registration token --> GH2
@@ -112,6 +114,8 @@ flowchart LR
         R -- runs the job --> GH2
         R -- one job, then exit --> X((removed))
     end
+
+    setup --> runtime
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design,
