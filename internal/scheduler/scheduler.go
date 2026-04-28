@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
@@ -155,11 +154,14 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 
 	// Insert before Launch so a crash in between leaves a 'starting' row
 	// for v1.1 reconciliation to clean up.
+	//
+	// Runner labels come from the job, not cfg.RunnerLabels: GitHub matches
+	// queued jobs to runners by intersecting `runs-on` with the runner's
+	// registered labels, so registering with the job's full label set is
+	// what makes the binding happen. cfg.RunnerLabels is admission filter
+	// only (applied at the webhook).
 	containerName, runnerName := s.nameFn(jobID)
-	rowLabels := strings.Join(s.cfg.RunnerLabels, ",")
-	if rowLabels == "" {
-		rowLabels = job.Labels
-	}
+	rowLabels := job.Labels
 	if err := s.store.InsertRunner(ctx, &store.Runner{
 		ContainerName: containerName,
 		Repo:          job.Repo,

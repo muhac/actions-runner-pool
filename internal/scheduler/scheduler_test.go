@@ -602,47 +602,40 @@ func TestReplay_StoreErrorDoesNotPanic(t *testing.T) {
 	}
 }
 
-// (8) Labels: cfg.RunnerLabels populated → joined and used as the runners.row
-// labels and the Launch spec labels.
-func TestDispatch_LabelsFromConfigJoined(t *testing.T) {
+// (8) Labels: runner registers with job.Labels, not cfg.RunnerLabels.
+// cfg.RunnerLabels is admission filter only (applied at the webhook), so
+// dispatch must register the runner with the labels GitHub will look for
+// when matching the queued job.
+func TestDispatch_RunnerLabelsCameFromJob(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
+	// seedPendingJob writes job.Labels = "self-hosted"; override below.
 	seedPendingJob(t, st, 1, "owner/repo")
+	if _, err := st.InsertJobIfNew(context.Background(), &store.Job{
+		ID: 2, Repo: "owner/repo", Action: "queued",
+		Labels: "self-hosted,linux,x64", DedupeKey: "owner/repo/2", Status: "pending",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := newCfg(4)
-	cfg.RunnerLabels = []string{"self-hosted", "linux", "x64"}
+	// cfg.RunnerLabels is non-empty AND different from job.Labels — the
+	// fix is: ignore cfg here, use job's full label set.
+	cfg.RunnerLabels = []string{"self-hosted"}
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, cfg, st, gh, ln)
 
-	s.dispatch(context.Background(), 1)
+	s.dispatch(context.Background(), 2)
 
-	wantLabels := "self-hosted,linux,x64"
-	if ln.lastSpec.Labels != wantLabels {
-		t.Fatalf("Launch spec.Labels=%q, want %q", ln.lastSpec.Labels, wantLabels)
+	want := "self-hosted,linux,x64"
+	if ln.lastSpec.Labels != want {
+		t.Fatalf("Launch spec.Labels=%q, want %q (must come from job, not cfg)", ln.lastSpec.Labels, want)
 	}
 	active, _ := st.ListActiveRunners(context.Background())
-	if len(active) != 1 || active[0].Labels != wantLabels {
-		t.Fatalf("runners.labels=%q, want %q (rows=%+v)", active[0].Labels, wantLabels, active)
-	}
-}
-
-// (8b) Labels: cfg.RunnerLabels empty → falls back to job.Labels.
-func TestDispatch_LabelsFallbackToJobLabels(t *testing.T) {
-	st := newStoreT(t)
-	seedAppConfig(t, st)
-	seedInstallation(t, st, 999, "owner/repo")
-	seedPendingJob(t, st, 1, "owner/repo") // job.Labels = "self-hosted"
-
-	gh := &spyGH{}
-	ln := &spyLauncher{}
-	s := newTestScheduler(t, newCfg(4), st, gh, ln)
-
-	s.dispatch(context.Background(), 1)
-
-	if ln.lastSpec.Labels != "self-hosted" {
-		t.Fatalf("Launch spec.Labels=%q, want %q (job.Labels fallback)", ln.lastSpec.Labels, "self-hosted")
+	if len(active) != 1 || active[0].Labels != want {
+		t.Fatalf("runners.labels=%q, want %q", active[0].Labels, want)
 	}
 }
 
