@@ -263,7 +263,11 @@ For v1 we accept that ghost runners may accumulate and rely on the user to occas
 - Per-repo fairness is a v1.x problem to revisit if a real user hits it.
 - Implementation is one `SELECT count(*) FROM runners WHERE status IN ('starting','idle','busy')` before each spawn.
 
-When the cap is hit, the worker **leaves the job in `pending`**, sleeps briefly, and re-checks. Webhook handler always accepts — the cap doesn't reject events, only delays them.
+When the cap is hit, the worker **re-enqueues the job after a short
+backoff** (`capBackoff`, currently 2 s) instead of busy-looping. The
+job stays `pending` in sqlite throughout, so a crash during the wait
+doesn't lose it. Webhook handler always accepts — the cap doesn't
+reject events, only delays them.
 
 ### 5. GitHub App, not PAT
 
@@ -365,14 +369,23 @@ Two pieces of configuration are *not* freely mutable after first run:
 
 #### `BASE_URL` is baked into the GitHub App
 
-The webhook URL, redirect URL, and homepage URL inside the GitHub App are written **at App creation** based on `BASE_URL`. Changing `BASE_URL` in `.env` later does NOT update the App — webhooks will keep coming to the old URL (and fail), and the manifest flow's redirect will go to the wrong place.
+The webhook URL, redirect URL, and homepage URL inside the GitHub App
+are written **at App creation** based on `BASE_URL`. Changing
+`BASE_URL` in `.env` later does NOT update the App — webhooks will
+keep coming to the old URL (and fail), and the manifest flow's
+redirect will go to the wrong place.
 
-Recovery path when the host moves:
-1. Edit the App in GitHub Settings → Developer settings → GitHub Apps → \[your App\] → update Webhook URL, Callback URL, Homepage URL.
-2. Update `BASE_URL` in `.env` and restart `gharp`.
-3. (Optional) Re-run manifest flow against a fresh App if the move is permanent and the old App is abandoned.
+Recovery path when the host moves: re-run `/setup` to create a fresh
+App against the new URL, install it on the same accounts, then delete
+the old App in GitHub Settings. Editing the existing App's URLs by
+hand is technically possible but easy to get wrong (three URLs must
+match, and the manifest flow's `state` cookie won't help if anything
+slips); recreating is more honest.
 
-We should validate at startup: if `app_config.base_url != config.BASE_URL`, log a loud warning. We do **not** auto-rewrite the GitHub App config — that requires user action and we shouldn't pretend otherwise.
+`gharp` validates this at startup: if the persisted `app_config.base_url`
+differs from the configured `BASE_URL`, it logs a `BASE_URL drift`
+warning naming both URLs. It does **not** auto-rewrite the GitHub App
+config — that requires user action.
 
 #### Webhook secret cannot rotate without re-creating the App
 
@@ -392,47 +405,46 @@ This *should* be supported in v1 via a one-shot CLI command (`gharp rotate-key <
 
 ### 7. Trust boundary
 
-`gharp` runs untrusted workflow code via Docker. The trust boundary is the **host machine** — workflows can do anything Docker can do (and with `docker.sock` mounted, that includes the host). Deployment guidance is "dedicated VM / cloud instance / homelab node", **not** a developer laptop or production server.
-
-(Detailed threat model lives in `docs/security.md`.)
+`gharp` runs untrusted workflow code via Docker. The trust boundary is the **host machine** — workflows can do anything Docker can do (and with `docker.sock` mounted, that includes the host). Deployment guidance is "dedicated VM / cloud instance / homelab node", **not** a developer laptop or production server. Self-hosted runners on **public** repos are explicitly discouraged ([GitHub guidance](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)) — any contributor can ship arbitrary code to the host via a pull request.
 
 ## Repository layout
 
 ```text
 actions-runner-pool/
-├── cmd/gharp/main.go              # entry point: config → wiring → http.ListenAndServe
+├── cmd/gharp/                    # entry point + BASE_URL drift check
+│   ├── main.go
+│   └── baseurl_drift.go
 ├── internal/
-│   ├── config/                    # env-var config loader
+│   ├── config/                   # env-var config loader
 │   ├── httpapi/
 │   │   ├── router.go
 │   │   └── handlers/
-│   │       ├── health.go          # GET /healthz
-│   │       ├── setup.go           # GET /setup, POST /setup/manifest
-│   │       ├── callback.go        # GET /github/app/callback
-│   │       └── webhook.go         # POST /github/webhook (verify + enqueue)
-│   ├── github/                    # low-level GitHub API wrapper
+│   │       ├── health.go         # GET /healthz
+│   │       ├── setup.go          # GET /setup
+│   │       ├── callback.go       # GET /github/app/callback
+│   │       ├── webhook.go        # POST /github/webhook (verify + enqueue)
+│   │       └── templates/        # embedded setup.html / setup_done.html
+│   ├── github/                   # low-level GitHub API wrapper
 │   │   ├── client.go
-│   │   ├── auth.go                # App JWT, installation token
-│   │   ├── manifest.go            # manifest flow conversion
-│   │   └── runners.go             # registration token, runner CRUD
-│   ├── scheduler/                 # the core: dedupe, limits, dispatch
+│   │   ├── auth.go               # App JWT, installation token cache
+│   │   ├── manifest.go           # manifest flow conversion
+│   │   └── runners.go            # registration token
+│   ├── scheduler/                # the core: replay, dedupe, dispatch
 │   │   ├── scheduler.go
-│   │   └── types.go               # workflow_job payload struct
+│   │   └── types.go              # workflow_job payload struct
 │   ├── runner/
-│   │   └── docker.go              # docker run assembly + lifecycle
+│   │   └── docker.go             # docker run assembly + lifecycle
 │   └── store/
 │       ├── models.go
-│       ├── store.go               # interface
-│       └── sqlite.go              # impl
-├── web/templates/
-│   ├── setup.html
-│   └── setup_done.html
+│       ├── store.go              # interface
+│       └── sqlite.go             # impl
+├── docs/
+│   ├── architecture.md           # this file
+│   ├── configuration.md          # env-var reference
+│   └── deploy.md                 # deployment guide
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
-├── docs/
-│   ├── architecture.md            # this file
-│   └── security.md
 ├── README.md
 ├── LICENSE
 ├── go.mod
