@@ -615,9 +615,10 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 	installRepo(t, baseURL, 99, "owner/repo")
 	queueJob(t, baseURL, 1234, 99, "owner/repo")
 
-	// Wait long enough for several cap-backoff cycles. We use a short
-	// observation window — we want to confirm NO second runner row
-	// appears and NO token mints happened.
+	// Short observation window — confirm NO second runner row appears
+	// and NO token mints happen while the cap is in effect. The default
+	// capBackoff is 2s so we won't see a re-attempt within this window;
+	// what we're checking is "dispatch bailed early without minting".
 	time.Sleep(300 * time.Millisecond)
 
 	db, _ := sql.Open("sqlite", "file:"+dbPath)
