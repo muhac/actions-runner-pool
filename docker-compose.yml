@@ -1,7 +1,10 @@
 services:
   gharp:
+    # Local source build is the default. Run `docker compose pull` first
+    # to use the published image instead, or `docker compose up --build`
+    # to force a rebuild from source.
     build: .
-    image: gharp:dev
+    image: muhac/gharp:latest
     container_name: gharp
     restart: unless-stopped
     env_file: .env
