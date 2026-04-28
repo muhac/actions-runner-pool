@@ -168,6 +168,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		RunnerName:    runnerName,
 		Labels:        rowLabels,
 		Status:        "starting",
+		StartedAt:     time.Now(),
 	}); err != nil {
 		s.log.Error("dispatch: InsertRunner failed", "job_id", jobID, "err", err)
 		return

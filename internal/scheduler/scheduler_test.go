@@ -240,6 +240,9 @@ func TestDispatch_HappyPath_InsertsStartingRunnerAndLaunches(t *testing.T) {
 	if runners[0].ContainerName != "test-runner" || runners[0].RunnerName != "test-runner" {
 		t.Fatalf("runner row missing names: %+v", runners[0])
 	}
+	if runners[0].StartedAt.IsZero() {
+		t.Fatalf("runner row started_at is zero (year 0001) — must be set on insert")
+	}
 }
 
 func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
