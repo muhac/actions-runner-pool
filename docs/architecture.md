@@ -231,7 +231,9 @@ This means:
 | `in_progress` | if `runner_name == ""`, **drop the event** (a dispatch race we lost — see below); otherwise `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` (only if currently `pending`/`dispatched`) and `UPDATE runners SET status='busy'` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
 | `completed` | `UPDATE jobs SET status='completed', conclusion=?` and `UPDATE runners SET status='finished', finished_at=?`. Container is already `--rm`-ing itself. | bookkeeping; no new docker action |
 
-The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched` and `PendingJobs` re-enqueues it after `dispatchedReplayAge` (currently 5 min).
+The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched`, and the scheduler's periodic replay (every `replayPeriod`, default 1 min) re-dispatches it once `updated_at` falls past `dispatchedReplayAge` (5 min).
+
+The companion guard on the `in_progress` writer: `MarkJobInProgress` now reports whether it actually advanced a row, and the webhook only flips the runner to `busy` when it did. A late `in_progress` arriving after `completed` therefore can no longer resurrect a finished runner.
 
 #### Ghost runners and reconciliation
 

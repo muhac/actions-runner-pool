@@ -33,25 +33,27 @@ type Scheduler struct {
 	jobCh  chan int64
 	log    *slog.Logger
 
-	capBackoff time.Duration
-	nameFn     func(jobID int64) (string, string)
+	capBackoff    time.Duration
+	replayPeriod  time.Duration
+	nameFn        func(jobID int64) (string, string)
 }
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cfg:        cfg,
-		store:      st,
-		gh:         gh,
-		runner:     rn,
-		jobCh:      make(chan int64, 256),
-		log:        log,
-		capBackoff: 2 * time.Second,
-		nameFn:     defaultNameFn,
+		cfg:          cfg,
+		store:        st,
+		gh:           gh,
+		runner:       rn,
+		jobCh:        make(chan int64, 256),
+		log:          log,
+		capBackoff:   2 * time.Second,
+		replayPeriod: 1 * time.Minute,
+		nameFn:       defaultNameFn,
 	}
 }
 
 // Enqueue is non-blocking: if the channel is full the job stays pending in
-// sqlite and the next startup-replay picks it up.
+// sqlite and the next replay picks it up.
 func (s *Scheduler) Enqueue(jobID int64) {
 	select {
 	case s.jobCh <- jobID:
@@ -62,12 +64,21 @@ func (s *Scheduler) Enqueue(jobID int64) {
 
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.replay(ctx)
+	ticker := time.NewTicker(s.replayPeriod)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case jobID := <-s.jobCh:
 			s.dispatch(ctx, jobID)
+		case <-ticker.C:
+			// Periodic rescue: any 'dispatched' row whose runner never
+			// claimed a job (the runner↔job race documented in
+			// architecture.md) becomes eligible after dispatchedReplayAge
+			// and gets re-dispatched here. Cheap when nothing is stuck —
+			// PendingJobs returns an empty slice in the steady state.
+			s.replay(ctx)
 		}
 	}
 }
@@ -101,8 +112,8 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		s.log.Warn("dispatch: job not found", "job_id", jobID)
 		return
 	}
-	if job.Status != "pending" {
-		s.log.Debug("dispatch: job no longer pending, skipping", "job_id", jobID, "status", job.Status)
+	if job.Status != "pending" && job.Status != "dispatched" {
+		s.log.Debug("dispatch: job no longer rescuable, skipping", "job_id", jobID, "status", job.Status)
 		return
 	}
 

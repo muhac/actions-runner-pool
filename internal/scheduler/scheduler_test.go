@@ -25,6 +25,10 @@ func newTestScheduler(t *testing.T, cfg *config.Config, st store.Store, gh GitHu
 	t.Helper()
 	s := New(cfg, st, gh, ln, discardLogger())
 	s.capBackoff = 1 * time.Millisecond
+	// Tighten the periodic replay so tests can observe a rescue without
+	// waiting a real minute. Tests that don't care still pay only the
+	// nil PendingJobs query cost per tick.
+	s.replayPeriod = 20 * time.Millisecond
 	s.nameFn = func(jobID int64) (string, string) {
 		name := "test-runner"
 		return name, name
@@ -497,6 +501,49 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
+	}
+}
+
+// (3) periodic replay: a 'dispatched' row whose runner never claimed a
+// job becomes eligible after dispatchedReplayAge and gets re-dispatched
+// by the periodic ticker (not just startup replay).
+func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	// Move the job to 'dispatched' and backdate updated_at so it falls
+	// past dispatchedReplayAge — simulates the exact production scenario
+	// (gharp launched a runner, GitHub gave the runner to a different
+	// job, the row sat in dispatched).
+	if err := st.MarkJobDispatched(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetJobUpdatedAt(context.Background(), 1, time.Now().Add(-1*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	// Deliberately do NOT pre-enqueue; the rescue must come from the
+	// ticker re-running PendingJobs, not from a queued event.
+	s.jobCh = make(chan int64, 256)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for ln.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if ln.calls.Load() == 0 {
+		t.Fatalf("periodic replay never re-dispatched the stale dispatched row")
 	}
 }
 

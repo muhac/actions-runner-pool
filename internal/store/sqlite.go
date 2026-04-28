@@ -210,8 +210,12 @@ func (s *SQLite) GetJob(ctx context.Context, jobID int64) (*Job, error) {
 const dispatchedReplayAge = 5 * time.Minute
 
 func (s *SQLite) MarkJobDispatched(ctx context.Context, jobID int64) error {
+	// Also refreshes updated_at when the row is already 'dispatched',
+	// so a periodic replay that re-dispatches a stale row resets its
+	// replay window — otherwise the next tick would re-fire immediately.
 	const q = `UPDATE jobs SET status='dispatched',
-		updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'`
+		updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status IN ('pending','dispatched')`
 	_, err := s.db.ExecContext(ctx, q, jobID)
 	return err
 }
