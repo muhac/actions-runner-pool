@@ -48,6 +48,15 @@ the GitHub App Manifest flow and persists the credentials locally.
 
 Pick the repos (or "All repositories") you want runners for and submit.
 
+> ⚠️ **Self-hosted runners + public repos = remote code execution.**
+> GitHub [explicitly recommends against](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/manage-access-with-runner-groups#about-self-hosted-runner-security)
+> using self-hosted runners with public repositories: any contributor
+> who can open a PR can run arbitrary code on your machine. gharp
+> doesn't change this. Only install the App on **private** repos you
+> trust, and run gharp on a **dedicated VM / cloud instance / homelab
+> node** — never on a host that holds secrets you wouldn't paste into
+> a workflow.
+
 ### 4. Add a workflow
 
 ```yaml
@@ -144,18 +153,6 @@ The pool server needs access to Docker:
 ```yaml
 - /var/run/docker.sock:/var/run/docker.sock
 ```
-
-### ⚠️ Security
-
-This project runs **untrusted workflow code**.
-
-> Do NOT run on sensitive machines.
-
-Recommended:
-
-* dedicated VM
-* cloud instance
-* homelab node
 
 ## ❓ FAQ
 
