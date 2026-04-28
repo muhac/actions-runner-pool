@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>gharp · Ready to install</title>
+  <title>gharp · Ready</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
     a.button { display: inline-block; padding: 0.6em 1.2em; background: #2da44e; color: white; text-decoration: none; border-radius: 6px; }
@@ -11,7 +11,9 @@
 </head>
 <body>
   <h1>🪉 gharp · ready to install</h1>
-  <p>The GitHub App <strong>{{.Slug}}</strong> has been registered.
+  <p>The GitHub App
+     <strong><a href="{{.SettingsURL}}">{{.Slug}}</a></strong>
+     has been registered.
      Now install it on the account/repos you want gharp to serve.</p>
   <p class="hint">Tip: keep the auto-generated name. Renaming on GitHub
      changes the App slug, which can break this install link

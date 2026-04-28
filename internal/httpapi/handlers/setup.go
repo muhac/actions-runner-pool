@@ -91,11 +91,13 @@ func (h *SetupHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *SetupHandler) renderDone(w http.ResponseWriter, slug string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := setupDoneTmpl.Execute(w, struct {
-		Slug       string
-		InstallURL string
+		Slug        string
+		SettingsURL string
+		InstallURL  string
 	}{
-		Slug:       slug,
-		InstallURL: "https://github.com/apps/" + slug + "/installations/new",
+		Slug:        slug,
+		SettingsURL: "https://github.com/settings/apps/" + slug,
+		InstallURL:  "https://github.com/apps/" + slug + "/installations/new",
 	}); err != nil {
 		h.logError("render setup_done template", err)
 	}
