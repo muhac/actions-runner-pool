@@ -25,8 +25,10 @@ type Store interface {
 	// MarkJobInProgress writes the real runner binding from a
 	// `workflow_job: in_progress` webhook. Only advances rows in
 	// 'pending' or 'dispatched' so that completed/cancelled rows can't
-	// be resurrected by a stale event.
-	MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) error
+	// be resurrected by a stale event. Returns whether a row was
+	// actually updated; callers use this to skip side effects (like
+	// flipping a finished runner back to busy) on no-op updates.
+	MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) (advanced bool, err error)
 	MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error
 	// PendingJobs returns rows still owed dispatch work — both 'pending'
 	// rows and stale 'dispatched' rows whose runner never claimed a job

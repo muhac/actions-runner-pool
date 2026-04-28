@@ -145,7 +145,7 @@ func TestMarkJobInProgressThenCompleted(t *testing.T) {
 	if _, err := s.InsertJobIfNew(ctx, j); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobInProgress(ctx, 7, 99, "runner-7"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 7, 99, "runner-7"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetJob(ctx, 7)
@@ -182,7 +182,7 @@ func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
 	}
 
 	// Webhook lands later with the real binding — must promote dispatched → in_progress.
-	if err := s.MarkJobInProgress(ctx, 8, 555, "runner-8"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 8, 555, "runner-8"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetJob(ctx, 8)
@@ -201,7 +201,7 @@ func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
 	if _, err := s.InsertJobIfNew(ctx, j2); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobInProgress(ctx, 9, 777, "runner-9"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 9, 777, "runner-9"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkJobDispatched(ctx, 9); err != nil {
@@ -221,13 +221,13 @@ func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
 	if _, err := s.InsertJobIfNew(ctx, j3); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobInProgress(ctx, 10, 1, "r"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 10, 1, "r"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkJobCompleted(ctx, 10, "success"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobInProgress(ctx, 10, 999, "ghost"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 10, 999, "ghost"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetJob(ctx, 10)
@@ -273,7 +273,7 @@ func TestPendingJobs_ReplaysStaleDispatched(t *testing.T) {
 	if _, err := s.InsertJobIfNew(ctx, ji); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobInProgress(ctx, 4, 1, "r"); err != nil {
+	if _, err := s.MarkJobInProgress(ctx, 4, 1, "r"); err != nil {
 		t.Fatal(err)
 	}
 

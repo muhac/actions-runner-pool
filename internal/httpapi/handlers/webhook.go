@@ -241,11 +241,17 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if err := h.Store.MarkJobInProgress(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.RunnerID, ev.WorkflowJob.RunnerName); err != nil {
+		advanced, err := h.Store.MarkJobInProgress(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.RunnerID, ev.WorkflowJob.RunnerName)
+		if err != nil {
 			h.logError("mark job in_progress", err)
 		}
-		if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "busy"); err != nil {
-			h.logError("update runner status busy", err)
+		// Only flip the runner to busy if the job row actually advanced.
+		// A late in_progress arriving after completed leaves the job
+		// untouched; we must not resurrect a finished runner.
+		if advanced {
+			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "busy"); err != nil {
+				h.logError("update runner status busy", err)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 

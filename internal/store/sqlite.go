@@ -216,12 +216,19 @@ func (s *SQLite) MarkJobDispatched(ctx context.Context, jobID int64) error {
 	return err
 }
 
-func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) error {
+func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) (bool, error) {
 	const q = `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?,
 		updated_at=CURRENT_TIMESTAMP
 		WHERE id=? AND status IN ('pending','dispatched')`
-	_, err := s.db.ExecContext(ctx, q, runnerID, runnerName, jobID)
-	return err
+	res, err := s.db.ExecContext(ctx, q, runnerID, runnerName, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error {

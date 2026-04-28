@@ -399,7 +399,7 @@ func TestDispatch_NonPendingJob_Skips(t *testing.T) {
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
 	seedPendingJob(t, st, 1, "owner/repo")
-	if err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
+	if _, err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -425,7 +425,7 @@ func TestDispatch_NonPendingJobAtCap_DoesNotRequeue(t *testing.T) {
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
 	seedPendingJob(t, st, 1, "owner/repo")
-	if err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
+	if _, err := st.MarkJobInProgress(context.Background(), 1, 7, "real-runner"); err != nil {
 		t.Fatal(err)
 	}
 	// At cap (cfg=1, one active runner already).
@@ -764,7 +764,7 @@ func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installa
 func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
 func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
 func (e *errStore) MarkJobDispatched(context.Context, int64) error            { panic("unused") }
-func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) error {
+func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) (bool, error) {
 	panic("unused")
 }
 func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
