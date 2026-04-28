@@ -4,12 +4,14 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 ## ✨ Features
 
+* 🔐 **Self-hosted** — no external service dependency
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
 * 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
-* 🔐 **Self-hosted** — no external service dependency
 
 ## 🚀 Quick Start
+
+### 1. Run gharp
 
 Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
 
@@ -23,9 +25,24 @@ docker run -d --name gharp \
   muhac/gharp:latest
 ```
 
-Then open `${BASE_URL}/setup`, click **Create GitHub App**, and install
-the App on the repos you want runners for. Add a workflow to one of
-them:
+`BASE_URL` must be a public HTTPS URL GitHub can reach.
+
+> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
+> and OAuth-callback URLs at `/setup` time. Changing it later won't
+> reconfigure the App — gharp will log a `BASE_URL drift` warning at
+> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
+> `BASE_URL` to the original value.
+
+### 2. Create the GitHub App
+
+Open `${BASE_URL}/setup` and click **Create GitHub App**. gharp drives
+the GitHub App Manifest flow and persists the credentials locally.
+
+### 3. Install the App
+
+Pick the repos (or "All repositories") you want runners for and submit.
+
+### 4. Add a workflow
 
 ```yaml
 jobs:
@@ -39,20 +56,11 @@ jobs:
 Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
 (default `self-hosted`) will get a fresh runner.
 
-`BASE_URL` must be a public HTTPS URL GitHub can reach — see
-[`docs/deploy.md`](docs/deploy.md) for Cloudflare Tunnel / ngrok /
-Tailscale Funnel walkthroughs and a from-source build.
-
-> ⚠️ **`BASE_URL` is sticky.** It's baked into the GitHub App's webhook
-> and OAuth-callback URLs at `/setup` time. Changing it later won't
-> reconfigure the App — gharp will log a `BASE_URL drift` warning at
-> startup. To migrate, re-run `/setup` (creating a fresh App) or revert
-> `BASE_URL` to the original value.
-
 📖 More:
 
 - **[`docs/deploy.md`](docs/deploy.md)** — production deployment
-  (compose, public URL, volumes, upgrades, troubleshooting).
+  (compose, Cloudflare Tunnel / ngrok / Tailscale Funnel, volumes,
+  upgrades, troubleshooting, from-source build).
 - **[`docs/configuration.md`](docs/configuration.md)** — every env
   variable, default, and validation rule.
 - **[`docs/architecture.md`](docs/architecture.md)** — design decisions
