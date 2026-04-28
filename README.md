@@ -20,8 +20,8 @@ docker run -d --name gharp \
   -p 8080:8080 \
   -e BASE_URL=https://gharp.example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v gharp-data:/data \
   -v /tmp/gharp:/tmp/gharp \
+  -v gharp-data:/data \
   muhac/gharp:latest
 ```
 
@@ -129,21 +129,6 @@ It will automatically:
 * subscribe to:
 
   * `workflow_job`
-
-## 📌 Important Notes
-
-### 🔁 Runner lifecycle
-
-* Each job gets a **fresh runner**
-* Runner is automatically removed after execution
-
-### 🐳 Docker requirement
-
-The pool server needs access to Docker:
-
-```yaml
-- /var/run/docker.sock:/var/run/docker.sock
-```
 
 ## 📦 Tech Stack
 
