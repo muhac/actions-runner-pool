@@ -36,6 +36,7 @@ func newCfg(maxConcurrent int) *config.Config {
 	return &config.Config{
 		MaxConcurrentRunners: maxConcurrent,
 		RunnerImage:          "test-image:latest",
+		GitHubWebBase:        "https://github.com",
 	}
 }
 

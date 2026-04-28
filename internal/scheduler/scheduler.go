@@ -182,7 +182,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		ContainerName:     containerName,
 		RegistrationToken: regTok,
 		RunnerName:        runnerName,
-		RepoURL:           "https://github.com/" + job.Repo,
+		RepoURL:           s.cfg.GitHubWebBase + "/" + job.Repo,
 		Labels:            rowLabels,
 		Image:             s.cfg.RunnerImage,
 	}); err != nil {

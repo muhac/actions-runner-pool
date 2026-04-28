@@ -21,6 +21,7 @@ type Config struct {
 	MaxConcurrentRunners int
 	DockerHost           string
 	GitHubAPIBase        string
+	GitHubWebBase        string
 	LogLevel             slog.Level
 }
 
@@ -52,6 +53,7 @@ func Load() (*Config, error) {
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
+		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
 		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),
 		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
@@ -62,6 +64,9 @@ func Load() (*Config, error) {
 
 	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("GITHUB_API_BASE must be an absolute URL with scheme and host, got %q", c.GitHubAPIBase)
+	}
+	if u, err := url.Parse(c.GitHubWebBase); err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("GITHUB_WEB_BASE must be an absolute URL with scheme and host, got %q", c.GitHubWebBase)
 	}
 
 	cmd, err := loadRunnerCommand()
