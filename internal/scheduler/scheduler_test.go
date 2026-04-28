@@ -265,11 +265,13 @@ func TestDispatch_HappyPath_InsertsStartingRunnerAndLaunches(t *testing.T) {
 	}
 
 	// Job must be advanced past 'pending' so a restart's replay won't
-	// re-dispatch it. Binding stays 0/"" because the webhook hasn't
-	// landed yet — those columns are written later by MarkJobInProgress.
+	// re-dispatch it immediately. The 'dispatched' status is the
+	// gharp-side placeholder; the webhook will promote it to
+	// 'in_progress' once GitHub binds a real runner. Binding stays
+	// 0/"" because that webhook hasn't landed yet.
 	job, _ := st.GetJob(context.Background(), 1)
-	if job == nil || job.Status != "in_progress" {
-		t.Fatalf("job status=%v, want in_progress after launch", job)
+	if job == nil || job.Status != "dispatched" {
+		t.Fatalf("job status=%v, want dispatched after launch", job)
 	}
 	if job.RunnerID != 0 || job.RunnerName != "" {
 		t.Fatalf("job binding=%d/%q, want unset 0/\"\" before webhook", job.RunnerID, job.RunnerName)
