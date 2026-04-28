@@ -5,11 +5,33 @@ services:
     container_name: gharp
     restart: unless-stopped
     env_file: .env
+    # RUNNER_COMMAND uses YAML `>-` so the multi-line source folds to one
+    # line at runtime; .env can't hold multi-line values.
+    environment:
+      RUNNER_COMMAND: >-
+        [
+          "docker","run","--rm","-d",
+          "--name","{{.ContainerName}}",
+          "--network=host",
+          "-v","/var/run/docker.sock:/var/run/docker.sock",
+          "-v","/tmp/gharp/{{.ContainerName}}:/_work",
+          "-e","REPO_URL={{.RepoURL}}",
+          "-e","RUNNER_TOKEN={{.RegistrationToken}}",
+          "-e","RUNNER_NAME={{.RunnerName}}",
+          "-e","LABELS={{.Labels}}",
+          "-e","RUNNER_WORKDIR=/_work",
+          "-e","EPHEMERAL=1",
+          "{{.Image}}"
+        ]
     ports:
       - "${PORT:-8080}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gharp-data:/data
+      # Mount the workdir tree at the same path inside the gharp container
+      # and on the host, so `-v /tmp/gharp/...` sources in RUNNER_COMMAND
+      # resolve identically from both views.
+      - /tmp/gharp:/tmp/gharp
 
 volumes:
   gharp-data:

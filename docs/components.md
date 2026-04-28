@@ -4,7 +4,7 @@
 > architecture doc says *what* and *why*; this doc says *in what order*, *with
 > which signatures*, and *how to verify each component before moving on*.
 
-## Status snapshot (post Phase 3)
+## Status snapshot (post Phase 4)
 
 | Package | File | State | Notes |
 |---|---|---|---|
@@ -18,7 +18,7 @@
 | `internal/github` | `auth.go` (+test) | ✅ | `AppJWT` (RS256) + `InstallationToken` with TTL cache. |
 | `internal/github` | `runners.go` (+test) | ✅ | `RegistrationToken`. List/Delete remain v1.1 stubs. |
 | `internal/scheduler` | `types.go` | ✅ | `WorkflowJobEvent` payload. |
-| `internal/scheduler` | `scheduler.go` | 🔧 | `New` / `Enqueue` ✅, `Run` is a TODO loop (Phase 4). |
+| `internal/scheduler` | `scheduler.go` (+test) | ✅ | `Run` replays `PendingJobs` then dispatches: cap-check → `GetJob` → `InstallationForRepo` → JWT/install/registration mints → `InsertRunner('starting')` → `Launcher.Launch`. Cap-exceeded re-enqueues; launch error marks runner finished. |
 | `internal/httpapi` | `router.go` | ✅ | `ServeMux` wiring. |
 | `internal/httpapi/handlers` | `health.go` | ✅ | `GET /healthz` → 200. |
 | `internal/httpapi/handlers` | `setup.go` (+test) | ✅ | manifest form + state cookie + setup_done; templates embedded via `go:embed`. |
@@ -30,9 +30,10 @@ Legend: ✅ done + tested · 🔧 partial · ❌ stub.
 End-to-end manually verified through Phase 3 (Cloudflare Tunnel +
 real GitHub App): `/setup` → manifest conversion → `app_config` row;
 install on account → `installations` + `installation_repos` rows;
-`gh workflow run` → `jobs` row with proper status transitions
-(`pending → completed`; cancellation by GitHub when no runner exists,
-which is exactly what Phase 4 will fix).
+`gh workflow run` → `jobs` row with proper status transitions.
+
+Phase 4 closes the loop in code (replay + dispatch + tests). End-to-end
+runner-launch smoke against a real repo is part of Phase 5.
 
 ---
 

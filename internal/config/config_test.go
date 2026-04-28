@@ -252,7 +252,7 @@ func TestLoad_RunnerLabels(t *testing.T) {
 		set  string
 		want []string
 	}{
-		{"unset-nil", "", nil},
+		{"unset-defaults-self-hosted", "", []string{"self-hosted"}},
 		{"single", "self-hosted", []string{"self-hosted"}},
 		{"multi-with-spaces", "self-hosted, gpu , linux", []string{"self-hosted", "gpu", "linux"}},
 		{"empty-segments-skipped", ",,foo,,bar,", []string{"foo", "bar"}},
