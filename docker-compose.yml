@@ -10,6 +10,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gharp-data:/data
+      # Shared work-dir tree. gharp creates per-runner subdirs under
+      # /tmp/gharp/<container-name>/_work and passes the SAME path as a
+      # `-v` mount source to `docker run`. The mount source is interpreted
+      # by the host docker daemon, so the path must exist on the host —
+      # bind-mounting /tmp/gharp into gharp itself keeps host and
+      # container views identical.
+      - /tmp/gharp:/tmp/gharp
 
 volumes:
   gharp-data:
