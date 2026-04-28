@@ -18,7 +18,13 @@ For the full env-variable reference, see [configuration.md](configuration.md).
 > only on a dedicated VM, cloud instance, or homelab node — not on a
 > machine that holds secrets you wouldn't paste into a workflow.
 
-## 1. Get the code
+## 1. Get the code (or skip — use the published image)
+
+The fastest path is the pre-built multi-arch image
+[`muhac/gharp`](https://hub.docker.com/r/muhac/gharp), shown in the
+README quick-start. Use that if you don't need to modify the code.
+
+To run from source (custom image, local development, or a fork):
 
 ```bash
 git clone https://github.com/muhac/actions-runner-pool
@@ -27,7 +33,10 @@ cp .env.example .env
 ```
 
 Edit `.env` and set `BASE_URL`. Leave the rest defaulted for now —
-[configuration.md](configuration.md) lists every knob.
+[configuration.md](configuration.md) lists every knob. From here,
+`docker compose up -d` (the bundled `docker-compose.yml`) builds the
+image locally and runs it with the same volumes the README example
+uses.
 
 ## 2. Provide a public HTTPS URL
 
