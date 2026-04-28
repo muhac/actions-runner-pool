@@ -65,7 +65,7 @@ jobs:
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
-      - run: echo "hello from ephemeral runner"
+      - run: echo "hello from $(hostname)"
 ```
 
 Every `workflow_job` whose `runs-on` set intersects `RUNNER_LABELS`
