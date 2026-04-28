@@ -57,6 +57,6 @@ for a worked example.
 - `BASE_URL` missing → startup fails.
 - `GITHUB_API_BASE` / `GITHUB_WEB_BASE` not absolute (no scheme/host) → startup fails.
 - `RUNNER_COMMAND` malformed JSON, empty array, or missing required placeholder → startup fails.
-- `MAX_CONCURRENT_RUNNERS` non-integer → silently uses default.
+- `MAX_CONCURRENT_RUNNERS` non-integer → silently uses default. `0` or negative → startup fails (otherwise the cap-exceeded branch would re-enqueue every job forever).
 - `LOG_LEVEL` unknown → silently uses `info`.
 - `BASE_URL` differs from value persisted in `app_config` → warning logged, startup continues.
