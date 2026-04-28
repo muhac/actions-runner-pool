@@ -19,8 +19,8 @@
      Renaming changes the slug and breaks the install shortcut shown
      on the next step (gharp itself keeps working — the link just
      becomes stale).</p>
-  <p class="hint">If GitHub says <em>"Name is already taken"</em>, you have
-     a previous gharp App for this URL. <a href="https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app#deleting-a-github-app">Delete the old App</a>
+  <p class="hint">If you see <em>"name is already taken"</em>, you have
+     a previous gharp App for this URL. <a target="_blank" href="https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app#deleting-a-github-app">Delete the old App</a>
      first, then come back and click again.</p>
   <form action="https://github.com/settings/apps/new?state={{.State}}" method="post">
     <input type="hidden" name="manifest" value="{{.ManifestJSON}}">
