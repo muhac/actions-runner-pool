@@ -5,6 +5,28 @@ services:
     container_name: gharp
     restart: unless-stopped
     env_file: .env
+    # RUNNER_COMMAND lives here, not in .env, because .env values can't span
+    # lines. YAML's `>-` folds the multi-line block into a single line by
+    # collapsing newlines into spaces — JSON tolerates the extra whitespace.
+    # `environment:` overrides any same-named key from `env_file:`.
+    environment:
+      RUNNER_COMMAND: >-
+        [
+          "docker","run","--rm","-d",
+          "--name","{{.ContainerName}}",
+          "--network=host",
+          "-v","/var/run/docker.sock:/var/run/docker.sock",
+          "-v","/tmp/gharp/{{.ContainerName}}:/_work",
+          "-e","REPO_URL={{.RepoURL}}",
+          "-e","RUNNER_TOKEN={{.RegistrationToken}}",
+          "-e","RUNNER_NAME={{.RunnerName}}",
+          "-e","LABELS={{.Labels}}",
+          "-e","RUNNER_WORKDIR=/_work",
+          "-e","EPHEMERAL=1",
+          "--log-opt","max-size=10m",
+          "--log-opt","max-file=3",
+          "{{.Image}}"
+        ]
     ports:
       - "${PORT:-8080}:8080"
     volumes:
