@@ -9,6 +9,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates docker-cli
 WORKDIR /app
 COPY --from=build /out/gharp /usr/local/bin/gharp
-COPY web ./web
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/gharp"]
