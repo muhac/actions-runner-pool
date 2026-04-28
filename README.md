@@ -2,7 +2,7 @@
 
 A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
-> 🍴 **Dogfooded** — this repo's own CI was running on a gharp pool during development ([commit history](https://github.com/muhac/actions-runner-pool/actions)).
+> 🍴 **Dogfooded** — this repo's own CI was running on a gharp pool during development!
 
 ## ✨ Features
 
