@@ -1,14 +1,12 @@
 # 🪉 gharp — GitHub Actions Runner Pool
 
-A self-hosted, Docker-based pool of ephemeral GitHub Actions runners — works for personal accounts, no Kubernetes required.
+A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 ## ✨ Features
 
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
-* 🧑‍💻 **Personal account support** — no organization required
-* 📦 **Multi-repository** — share compute across repos (not supported natively by GitHub)
-* 🐳 **Docker-based** — simple, no Kubernetes required
+* 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
 * 🔐 **Self-hosted** — no external service dependency
 
 ## 🚀 Quick Start
