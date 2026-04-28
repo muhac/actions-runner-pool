@@ -145,38 +145,6 @@ The pool server needs access to Docker:
 - /var/run/docker.sock:/var/run/docker.sock
 ```
 
-## ❓ FAQ
-
-### Can I use one runner for multiple repositories?
-
-Not directly.
-
-GitHub only supports repo/org/enterprise-level runners.
-
-👉 This project works around that using dynamic runner creation.
-
-### Do I need Kubernetes?
-
-No.
-
-👉 This project is designed for **single-machine setups using Docker**.
-
-### Can I use this for organizations?
-
-Yes.
-
-But it's primarily optimized for:
-
-* personal accounts
-* small teams
-
-## 🎯 Target Use Cases
-
-* Personal GitHub accounts with multiple repositories
-* Homelab / NAS CI setups
-* Small teams without Kubernetes
-* Developers wanting full control over CI environment
-
 ## 📦 Tech Stack
 
 * Go (server)
