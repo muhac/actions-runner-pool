@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -199,8 +200,17 @@ func (s *SQLite) GetJob(ctx context.Context, jobID int64) (*Job, error) {
 	return &j, nil
 }
 
+// dispatchedReplayAge bounds how stale a 'dispatched' job can be before
+// PendingJobs replays it. The dispatch path's normal completion is the
+// real `workflow_job: in_progress` webhook flipping the row to
+// 'in_progress' — typically within seconds. If that never arrives
+// (GitHub assigned the runner to a different job, our process crashed
+// after MarkJobDispatched but before launch acked, etc.), replay rescues
+// the job after this window.
+const dispatchedReplayAge = 5 * time.Minute
+
 func (s *SQLite) MarkJobDispatched(ctx context.Context, jobID int64) error {
-	const q = `UPDATE jobs SET status='in_progress',
+	const q = `UPDATE jobs SET status='dispatched',
 		updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'`
 	_, err := s.db.ExecContext(ctx, q, jobID)
 	return err
@@ -208,7 +218,8 @@ func (s *SQLite) MarkJobDispatched(ctx context.Context, jobID int64) error {
 
 func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) error {
 	const q = `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?,
-		updated_at=CURRENT_TIMESTAMP WHERE id=?`
+		updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status IN ('pending','dispatched')`
 	_, err := s.db.ExecContext(ctx, q, runnerID, runnerName, jobID)
 	return err
 }
@@ -220,11 +231,18 @@ func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion s
 	return err
 }
 
+// PendingJobs returns rows still owed dispatch work: anything in
+// 'pending', plus 'dispatched' rows whose updated_at is older than
+// dispatchedReplayAge (the runner we launched never claimed a job —
+// see the dispatchedReplayAge comment).
 func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 	const q = `SELECT id, repo, action, labels, dedupe_key, status, conclusion,
 		runner_id, runner_name, received_at, updated_at
-		FROM jobs WHERE status='pending' ORDER BY received_at, id`
-	rows, err := s.db.QueryContext(ctx, q)
+		FROM jobs
+		WHERE status='pending'
+		   OR (status='dispatched' AND updated_at < datetime('now', ?))
+		ORDER BY received_at, id`
+	rows, err := s.db.QueryContext(ctx, q, fmt.Sprintf("-%d seconds", int(dispatchedReplayAge.Seconds())))
 	if err != nil {
 		return nil, err
 	}
