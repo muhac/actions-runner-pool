@@ -21,8 +21,6 @@ services:
           "-e","LABELS={{.Labels}}",
           "-e","RUNNER_WORKDIR=/_work",
           "-e","EPHEMERAL=1",
-          "--log-opt","max-size=10m",
-          "--log-opt","max-file=3",
           "{{.Image}}"
         ]
     ports:
