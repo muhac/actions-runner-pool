@@ -131,7 +131,7 @@ permission scopes.
 
 ## 📄 License
 
-Apache License 2.0
+[Apache License 2.0](LICENSE) — Copyright 2026 Muhan Li.
 
 ## 🙌 Acknowledgements
 
