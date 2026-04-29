@@ -315,7 +315,7 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *WebhookHandler) publicRepoAllowed(repo scheduler.Repository) bool {
-	if repo.Private {
+	if !repoIsPublic(repo) {
 		return true
 	}
 	if h.Cfg != nil && h.Cfg.AllowPublicRepos {
@@ -326,6 +326,16 @@ func (h *WebhookHandler) publicRepoAllowed(repo scheduler.Repository) bool {
 	}
 	_, ok := h.Cfg.RepoAllowlistSet[strings.ToLower(strings.TrimSpace(repo.FullName))]
 	return ok
+}
+
+func repoIsPublic(repo scheduler.Repository) bool {
+	switch strings.ToLower(strings.TrimSpace(repo.Visibility)) {
+	case "public":
+		return true
+	case "private", "internal":
+		return false
+	}
+	return !repo.Private
 }
 
 // labelsMatch returns true if every job runs-on label can be satisfied

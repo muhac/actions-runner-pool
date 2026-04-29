@@ -261,6 +261,28 @@ func TestWebhook_PublicRepo_DefaultDrops(t *testing.T) {
 	}
 }
 
+func TestWebhook_InternalRepo_DefaultProceeds(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/internal", "private": false, "visibility": "internal"},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 1 || st.insertedJobs[0].Repo != "alice/internal" {
+		t.Errorf("InsertJobIfNew not called as expected: %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 1 {
+		t.Errorf("expected Enqueue, got %d", sch.calls.Load())
+	}
+}
+
 func TestWebhook_PublicRepo_AllowPublicReposProceeds(t *testing.T) {
 	body := []byte(`{
 		"action": "queued",
