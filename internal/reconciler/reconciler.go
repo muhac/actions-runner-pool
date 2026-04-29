@@ -382,8 +382,12 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 	}
 
 	appCfg, err := r.store.GetAppConfig(ctx)
-	if err != nil || appCfg == nil {
+	if err != nil {
 		r.log.Error("reconciler/github: GetAppConfig failed; skipping sweep", "err", err)
+		return
+	}
+	if appCfg == nil {
+		r.log.Debug("reconciler/github: app config not set; skipping sweep")
 		return
 	}
 	jwt, err := r.gh.AppJWT(appCfg.PEM, appCfg.AppID)
