@@ -296,22 +296,44 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// labelsMatch returns true if any of the runs-on labels intersects the
-// configured RunnerLabels. An unset configured set means "serve everything".
+// labelsMatch returns true if every job runs-on label can be satisfied
+// by this pool — i.e. job.runs_on ⊆ cfg.RunnerLabels (with the
+// implicit "self-hosted" label always considered satisfied because
+// GitHub assigns it to every self-hosted runner). An empty configured
+// set means "serve everything".
+//
+// GitHub's runs-on semantics are cumulative: a runner is only eligible
+// for a job if it has ALL of the job's labels (per the
+// "using-self-hosted-runners-in-a-workflow" docs). The previous
+// any-overlap check accepted jobs we couldn't fulfill — e.g. a job
+// requiring [self-hosted, gpu] on a pool that only advertises
+// [self-hosted] would launch a runner GitHub would never bind, leaving
+// a ghost.
 func labelsMatch(runsOn, configured []string) bool {
 	if len(configured) == 0 {
 		return true
 	}
-	want := make(map[string]struct{}, len(configured))
+	have := make(map[string]struct{}, len(configured)+1)
 	for _, l := range configured {
-		want[l] = struct{}{}
+		have[normalizeLabel(l)] = struct{}{}
 	}
+	// "self-hosted" is GitHub-assigned to every self-hosted runner, so
+	// a job requiring it is always satisfiable on this pool even if
+	// the operator didn't list it explicitly.
+	have["self-hosted"] = struct{}{}
 	for _, l := range runsOn {
-		if _, ok := want[l]; ok {
-			return true
+		if _, ok := have[normalizeLabel(l)]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+// normalizeLabel lower-cases and trims a label. GitHub treats labels
+// as case-insensitive (per the labels doc), so we do the same to avoid
+// rejecting Self-Hosted vs self-hosted.
+func normalizeLabel(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func (h *WebhookHandler) logError(msg string, err error) {

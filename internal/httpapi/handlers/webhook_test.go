@@ -229,11 +229,20 @@ func TestWebhook_QueuedStoreError_503AndNoEnqueue(t *testing.T) {
 	}
 }
 
+// Pool advertises [linux] but a job requires [self-hosted, gpu] →
+// must be rejected because gpu is not satisfiable. Pre-superset, this
+// also failed (no overlap). Post-superset, the rejection mechanism
+// changed but the outcome is the same.
 func TestWebhook_LabelFilter_DropsNonMatching(t *testing.T) {
-	body := []byte(queuedJobBody) // labels: ["self-hosted"]
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12346, "labels": ["self-hosted", "gpu"]},
+		"repository": {"full_name": "alice/repo"},
+		"installation": {"id": 99}
+	}`)
 	st := storeWithSecret(testWebhookSecret)
 	sch := &spyEnqueuer{}
-	h := newWebhookHandler(t, st, sch, []string{"gpu"}) // configured doesn't match
+	h := newWebhookHandler(t, st, sch, []string{"linux"}) // gpu unsatisfiable
 	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
@@ -389,5 +398,37 @@ func TestWebhook_EmptySecret_RejectsSignature(t *testing.T) {
 	rr := postWebhook(t, h, "ping", body, sign("", body))
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (empty-secret rejection)", rr.Code)
+	}
+}
+
+// labelsMatch enforces GitHub's cumulative runs-on semantics: a job is
+// only accepted if every required label can be satisfied by this pool.
+// 'self-hosted' is implicit (GitHub auto-assigns it) so it's always
+// satisfiable. Empty configured = serve everything (legacy behavior
+// for operators who haven't set RUNNER_LABELS).
+func TestLabelsMatch_SupersetSemantics(t *testing.T) {
+	cases := []struct {
+		name       string
+		runsOn     []string
+		configured []string
+		want       bool
+	}{
+		// The original failure mode: pool advertises self-hosted, job
+		// also wants gpu — must REJECT (current code accepted it,
+		// leaving a ghost runner GitHub never bound).
+		{"requires-extra-label", []string{"self-hosted", "gpu"}, []string{"self-hosted"}, false},
+		{"all-required-present", []string{"self-hosted", "gpu"}, []string{"gpu"}, true},
+		{"only-self-hosted", []string{"self-hosted"}, []string{}, true},
+		{"empty-configured-serves-everything", []string{"gpu", "linux"}, nil, true},
+		{"case-insensitive-match", []string{"Self-Hosted", "GPU"}, []string{"gpu"}, true},
+		{"explicit-self-hosted-not-required-in-cfg", []string{"self-hosted"}, []string{"linux"}, true},
+		{"job-with-no-labels-trivially-satisfied", nil, []string{"gpu"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := labelsMatch(tc.runsOn, tc.configured); got != tc.want {
+				t.Fatalf("labelsMatch(%v, %v) = %v, want %v", tc.runsOn, tc.configured, got, tc.want)
+			}
+		})
 	}
 }
