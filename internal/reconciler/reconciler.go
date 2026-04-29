@@ -128,10 +128,18 @@ func (r *Reconciler) Run(ctx context.Context) error {
 
 // Reconcile runs one full sweep: ghost runners, then orphan containers.
 // Exposed for tests and for callers that want to force a sweep (e.g.
-// after a crash recovery).
+// after a crash recovery). Logs a debug heartbeat at the end so an
+// operator tailing logs can confirm the loop is alive even when no
+// action was taken (the steady state).
 func (r *Reconciler) Reconcile(ctx context.Context) {
-	known := r.sweepGhostRunners(ctx)
-	r.sweepOrphanContainers(ctx, known)
+	known, ghostFinished, lifetimeReaped := r.sweepGhostRunners(ctx)
+	orphans := r.sweepOrphanContainers(ctx, known)
+	r.log.Debug("reconciler: tick complete",
+		"active", len(known),
+		"ghosts_cleared", ghostFinished,
+		"lifetime_reaped", lifetimeReaped,
+		"orphans_removed", orphans,
+	)
 }
 
 // sweepGhostRunners walks ListActiveRunners and either:
@@ -145,12 +153,12 @@ func (r *Reconciler) Reconcile(ctx context.Context) {
 //
 // Returns the set of container names left alive, so the orphan sweep
 // doesn't have to re-inspect them.
-func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} {
-	alive := map[string]struct{}{}
+func (r *Reconciler) sweepGhostRunners(ctx context.Context) (alive map[string]struct{}, ghostFinished, lifetimeReaped int) {
+	alive = map[string]struct{}{}
 	rows, err := r.store.ListActiveRunners(ctx)
 	if err != nil {
 		r.log.Error("reconciler: ListActiveRunners failed", "err", err)
-		return alive
+		return alive, 0, 0
 	}
 	now := r.nowFn()
 	for _, row := range rows {
@@ -171,6 +179,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 				continue
 			}
 			r.log.Info("reconciler: ghost runner cleared", "container", row.ContainerName, "runner_name", row.RunnerName, "repo", row.Repo)
+			ghostFinished++
 			continue
 		}
 		// Container is alive. Lifetime check: a runner that's been
@@ -194,11 +203,12 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 			if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
 				r.log.Error("reconciler: UpdateRunnerStatus(finished) after lifetime reap failed", "container", row.ContainerName, "err", err)
 			}
+			lifetimeReaped++
 			continue
 		}
 		alive[row.ContainerName] = struct{}{}
 	}
-	return alive
+	return alive, ghostFinished, lifetimeReaped
 }
 
 // sweepOrphanContainers force-removes containers matching our name
@@ -210,14 +220,14 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 // than the grace, which broke under continuous load — a host with a
 // steady stream of new dispatches would never clean up actual orphans
 // because there was always a young row in the table.
-func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string]struct{}) {
+func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string]struct{}) (removed int) {
 	cs, err := r.docker.ListByPrefix(ctx, ContainerNamePrefix)
 	if err != nil {
 		r.log.Error("reconciler: ListByPrefix failed", "err", err)
-		return
+		return 0
 	}
 	if len(cs) == 0 {
-		return
+		return 0
 	}
 	now := r.nowFn()
 	for _, c := range cs {
@@ -240,5 +250,7 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 			continue
 		}
 		r.log.Info("reconciler: orphan container removed", "container", c.Name)
+		removed++
 	}
+	return removed
 }
