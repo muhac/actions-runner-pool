@@ -444,7 +444,7 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 		}
 	}
 	r.log.Debug("reconciler/github: sweep complete",
-		"repos", len(known), "deleted", totalDeleted)
+		"repos", len(repos), "deleted", totalDeleted)
 }
 
 func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName string) (bool, error) {
