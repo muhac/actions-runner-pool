@@ -40,6 +40,8 @@ type Scheduler struct {
 	log    *slog.Logger
 
 	capBackoff              time.Duration
+	launchRetryMax          int
+	launchRetryBackoff      time.Duration
 	replayPeriod            time.Duration
 	notFoundConfirmDelay    time.Duration
 	noInstallationCancelAge time.Duration
@@ -49,15 +51,17 @@ type Scheduler struct {
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cfg:                     cfg,
-		store:                   st,
-		gh:                      gh,
-		runner:                  rn,
-		jobCh:                   make(chan int64, 256),
-		log:                     log,
-		capBackoff:              2 * time.Second,
-		replayPeriod:            1 * time.Minute,
-		notFoundConfirmDelay:    2 * time.Second,
+		cfg:                  cfg,
+		store:                st,
+		gh:                   gh,
+		runner:               rn,
+		jobCh:                make(chan int64, 256),
+		log:                  log,
+		capBackoff:           2 * time.Second,
+		launchRetryMax:       3,
+		launchRetryBackoff:   1 * time.Second,
+		replayPeriod:         1 * time.Minute,
+		notFoundConfirmDelay: 2 * time.Second,
 		// Out-of-order webhook delivery (queued before
 		// installation_repositories:added) usually resolves within a
 		// few seconds. 1 minute gives plenty of room for the install
@@ -287,14 +291,15 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	if err := s.runner.Launch(ctx, runner.Spec{
+	spec := runner.Spec{
 		ContainerName:     containerName,
 		RegistrationToken: regTok,
 		RunnerName:        runnerName,
 		RepoURL:           s.cfg.GitHubWebBase + "/" + job.Repo,
 		Labels:            rowLabels,
 		Image:             s.cfg.RunnerImage,
-	}); err != nil {
+	}
+	if err := s.launchWithRetry(ctx, jobID, containerName, spec); err != nil {
 		s.log.Error("dispatch: Launch failed", "job_id", jobID, "container", containerName, "err", err)
 		if uerr := s.store.UpdateRunnerStatus(ctx, containerName, "finished"); uerr != nil {
 			s.log.Error("dispatch: UpdateRunnerStatus(finished) after launch error failed", "container", containerName, "err", uerr)
@@ -310,6 +315,40 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		s.log.Error("dispatch: MarkJobDispatched after launch failed", "job_id", jobID, "err", err)
 	}
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
+}
+
+func (s *Scheduler) launchWithRetry(ctx context.Context, jobID int64, containerName string, spec runner.Spec) error {
+	maxAttempts := s.launchRetryMax
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	backoff := s.launchRetryBackoff
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := s.runner.Launch(ctx, spec); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		s.log.Warn("dispatch: Launch failed; retrying",
+			"job_id", jobID,
+			"container", containerName,
+			"attempt", attempt,
+			"max_attempts", maxAttempts,
+			"backoff", backoff,
+			"err", lastErr,
+		)
+		if !sleepContext(ctx, backoff) {
+			return ctx.Err()
+		}
+		if backoff > 0 {
+			backoff *= 2
+		}
+	}
+	return fmt.Errorf("launch failed after %d attempt(s): %w", maxAttempts, lastErr)
 }
 
 // newNameFn returns a name generator that yields prefix+jobID+hex.
@@ -372,4 +411,25 @@ func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobI
 		return false, false
 	}
 	return live.NotFound || live.AuthFailed, false
+}
+
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer func() {
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }

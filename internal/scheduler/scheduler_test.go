@@ -26,6 +26,7 @@ func newTestScheduler(t *testing.T, cfg *config.Config, st store.Store, gh GitHu
 	t.Helper()
 	s := New(cfg, st, gh, ln, discardLogger())
 	s.capBackoff = 1 * time.Millisecond
+	s.launchRetryBackoff = 1 * time.Millisecond
 	// Tighten the periodic replay so tests can observe a rescue without
 	// waiting a real minute. Tests that don't care still pay only the
 	// nil PendingJobs query cost per tick.
@@ -138,12 +139,19 @@ type spyLauncher struct {
 	mu       sync.Mutex
 	lastSpec runner.Spec
 	err      error
+	errs     []error
 }
 
 func (l *spyLauncher) Launch(ctx context.Context, spec runner.Spec) error {
 	l.calls.Add(1)
 	l.mu.Lock()
 	l.lastSpec = spec
+	if len(l.errs) > 0 {
+		err := l.errs[0]
+		l.errs = l.errs[1:]
+		l.mu.Unlock()
+		return err
+	}
 	l.mu.Unlock()
 	return l.err
 }
@@ -428,10 +436,75 @@ func TestDispatch_LaunchError_MarksFinished(t *testing.T) {
 
 	s.dispatch(context.Background(), 1)
 
+	if got := ln.calls.Load(); got != 3 {
+		t.Fatalf("Launch calls = %d, want 3 (bounded retries)", got)
+	}
 	// ListActiveRunners filters to starting/idle/busy — finished should not appear.
 	active, _ := st.ListActiveRunners(context.Background())
 	if len(active) != 0 {
 		t.Fatalf("active runners after launch error = %d, want 0", len(active))
+	}
+}
+
+func TestDispatch_LaunchRetry_EventualSuccess(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{
+		errs: []error{
+			errors.New("docker daemon busy"),
+			errors.New("pull timeout"),
+			nil, // third attempt succeeds
+		},
+	}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+
+	s.dispatch(context.Background(), 1)
+
+	if got := ln.calls.Load(); got != 3 {
+		t.Fatalf("Launch calls = %d, want 3 with retries", got)
+	}
+	job, err := st.GetJob(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.Status != "dispatched" {
+		t.Fatalf("job status=%v, want dispatched after retry success", job)
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].Status != "starting" {
+		t.Fatalf("active runners=%+v, want one starting row after retry success", active)
+	}
+}
+
+func TestDispatch_LaunchRetry_RespectsConfiguredAttemptLimit(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{err: errors.New("still failing")}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.launchRetryMax = 2
+
+	s.dispatch(context.Background(), 1)
+
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (configured retry cap)", got)
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active runners after exhausted retries = %d, want 0", len(active))
 	}
 }
 
