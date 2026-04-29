@@ -133,6 +133,9 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=4",
 		"LOG_LEVEL=warn",
+		// Per-test prefix so the binary's reconciler doesn't reach
+		// into other gharp containers on the host.
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -325,6 +328,7 @@ func TestIntegration_StartupReplay_RecoversPendingJob(t *testing.T) {
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=4",
 		"LOG_LEVEL=warn",
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
 	)
 	stderr, _ := cmd.StderrPipe()
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
@@ -433,6 +437,11 @@ func bootBinary(t *testing.T, ghURL string, extraEnv map[string]string) bootResu
 		"RUNNER_COMMAND":         string(defaultRunnerCmd),
 		"MAX_CONCURRENT_RUNNERS": "4",
 		"LOG_LEVEL":              "warn",
+		// Confine the reconciler's orphan sweep to a per-test
+		// namespace so the binary doesn't reach into other gharp
+		// containers on the host (notably the self-hosted runner
+		// container the test itself runs in).
+		"RUNNER_NAME_PREFIX": "gharp-it-" + t.Name() + "-",
 	}
 	for k, v := range extraEnv {
 		env[k] = v
@@ -634,6 +643,10 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 		"STORE_DSN=file:"+dbPath, "GITHUB_API_BASE="+gh.URL,
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=1", "LOG_LEVEL=warn",
+		// Cap-occupied container name uses 'gharp-it-cap-' prefix; the
+		// reconciler's orphan sweep must use the same so it sees the
+		// pre-seeded container as in-namespace.
+		"RUNNER_NAME_PREFIX=gharp-it-cap-",
 	)
 	stderr, _ := cmd.StderrPipe()
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
