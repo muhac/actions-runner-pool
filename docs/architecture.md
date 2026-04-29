@@ -247,11 +247,15 @@ Sources of ghost runners:
 3. Process crash between `INSERT INTO runners` and `docker run` — runner row exists, container does not.
 4. Container running but `gharp` lost track (e.g. someone manually removed it).
 
-A reconciliation loop (background goroutine, 60s interval) ships in `internal/reconciler` and runs alongside the scheduler. The first cut is **deliberately narrower than the original sketch** — it covers the two sources that produce the cap-deadlock symptom (sources 3 and 4 above) and defers GitHub-side cleanup and idle-timeout reaping. Pseudocode:
+A reconciliation loop (background goroutine) ships in `internal/reconciler` and runs alongside the scheduler. Two cadences:
+- `60s` — docker-side sweeps (ghost / lifetime / orphan)
+- `5min` — GitHub-side sweep, bounded slower to keep installation-token quota usage low
+
+Pseudocode:
 
 ```text
 every 60s:
-    # ghost runner / lifetime sweep (sources 2, 3, 4 above)
+    # ghost runner / lifetime sweep
     for each row in runners where status in ('starting','idle','busy'):
         if docker inspect <container_name> says "no such container":
             UPDATE runners SET status='finished'   # frees the cap slot
@@ -264,19 +268,27 @@ every 60s:
         else:
             keep
 
-    # orphan container sweep (source 4, the inverse direction)
-    for (name, createdAt) in `docker ps -a --filter name=gharp- --format {{.Names}}|{{.CreatedAt}}`:
+    # orphan container sweep
+    for (name, createdAt) in `docker ps -a --filter name=<RUNNER_NAME_PREFIX> --format {{.Names}}|{{.CreatedAt}}`:
         if name not in active runners table:
             if createdAt is recent (< 30s grace):
                 defer                               # per-container, protects very new containers from short-lived docker-vs-DB visibility skew across sqlite connections
             else:
                 docker rm -f <name>
+
+every 5min (only if a GitHubClient is wired):
+    # GitHub-side ghost sweep
+    for each (repo, installation_id) in installation_repos:    # iterate ALL installed repos, not just those with active rows
+        mint installation_token (cached per installation_id within tick)
+        ours = active runner names for this repo (may be empty)
+        for each runner in GET /repos/{repo}/actions/runners:
+            if name has our prefix and not in ours and not busy:
+                DELETE /repos/{repo}/actions/runners/{id}
 ```
 
 The dispatched job tied to a cleared runner is left for the scheduler's existing `dispatchedReplayAge` (5 min) replay to rescue — no direct coupling between the reconciler and the jobs table.
 
 **Out of scope for this pass** (deferred to later v1.x):
-- GitHub-side ghost runner deregistration (`DELETE /repos/{owner}/{repo}/actions/runners/{id}`). Requires installation-token plumbing into the loop and is mostly a polish item — these registrations expire on their own once the runner is unreachable.
 - GitHub-driven idle reaping (querying `GET /repos/{owner}/{repo}/actions/runners` for `online + busy=false + age > IDLE_TIMEOUT`). The local lifetime sweep above is the cheaper substitute: it doesn't distinguish "online idle" from "stuck busy," but it bounds cap-slot occupation either way without burning a GitHub API call per tick. If a future operator needs precise idle detection (e.g. to free slots faster than the lifetime cap allows), this is the seam to fill in.
 - Live cap re-check inside `dispatch` (re-`docker inspect` every active runner before launch). Functionally redundant with the 60s loop and would double the docker call rate.
 
