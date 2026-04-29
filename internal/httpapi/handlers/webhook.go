@@ -143,20 +143,24 @@ func (h *WebhookHandler) handleInstallation(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	case "deleted":
-		// The App was uninstalled. Remove the repo→installation rows and
-		// cancel any still-dispatchable jobs for those repos: dispatch
-		// would otherwise loop forever on jobs whose installation token
-		// can no longer be minted (and the user already told GitHub
-		// they're done with this).
+		// The App was uninstalled. Order matters: drop the
+		// repo→installation mapping FIRST, then cancel pending jobs.
+		// A `workflow_job: queued` webhook racing this handler
+		// otherwise inserts a new pending row between our cancel
+		// query and the mapping removal — landing in a state where
+		// dispatch would still see the old mapping. With the order
+		// reversed, any racing insert lands AFTER the mapping is
+		// gone, so dispatch's "no installation -> cancel" fallback
+		// catches it.
 		for _, repo := range ev.Repositories {
+			if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
+				h.logError("remove repo->installation after installation deleted", err)
+			}
 			n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
 			if err != nil {
 				h.logError("cancel pending jobs after installation deleted", err)
 			} else if n > 0 && h.Log != nil {
 				h.Log.Info("installation deleted: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
-			}
-			if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
-				h.logError("remove repo->installation after installation deleted", err)
 			}
 		}
 		if h.Log != nil {
@@ -193,17 +197,19 @@ func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r
 		}
 	}
 	for _, repo := range ev.RepositoriesRemoved {
-		// Cancel before removing the installation mapping so dispatch,
-		// if it raced us, finds the same "no longer dispatchable" state
-		// the install removal implies.
+		// Remove BEFORE cancel so a racing queued webhook lands after
+		// the mapping is gone and falls into dispatch's
+		// "no installation -> cancel" fallback. The reverse order
+		// would let the racing insert slip through cancel and then
+		// require dispatch to clean it up later.
+		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
+			h.logError("remove repo->installation", err)
+		}
 		n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
 		if err != nil {
 			h.logError("cancel pending jobs after repo removed", err)
 		} else if n > 0 && h.Log != nil {
 			h.Log.Info("repo removed from installation: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
-		}
-		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
-			h.logError("remove repo->installation", err)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
