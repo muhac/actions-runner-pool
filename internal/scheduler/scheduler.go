@@ -39,24 +39,32 @@ type Scheduler struct {
 	jobCh  chan int64
 	log    *slog.Logger
 
-	capBackoff           time.Duration
-	replayPeriod         time.Duration
-	notFoundConfirmDelay time.Duration
-	nameFn               func(jobID int64) (string, string)
+	capBackoff              time.Duration
+	replayPeriod            time.Duration
+	notFoundConfirmDelay    time.Duration
+	noInstallationCancelAge time.Duration
+	nameFn                  func(jobID int64) (string, string)
+	nowFn                   func() time.Time
 }
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cfg:                  cfg,
-		store:                st,
-		gh:                   gh,
-		runner:               rn,
-		jobCh:                make(chan int64, 256),
-		log:                  log,
-		capBackoff:           2 * time.Second,
-		replayPeriod:         1 * time.Minute,
-		notFoundConfirmDelay: 2 * time.Second,
-		nameFn:               defaultNameFn,
+		cfg:                     cfg,
+		store:                   st,
+		gh:                      gh,
+		runner:                  rn,
+		jobCh:                   make(chan int64, 256),
+		log:                     log,
+		capBackoff:              2 * time.Second,
+		replayPeriod:            1 * time.Minute,
+		notFoundConfirmDelay:    2 * time.Second,
+		// Out-of-order webhook delivery (queued before
+		// installation_repositories:added) usually resolves within a
+		// few seconds. 1 minute gives plenty of room for the install
+		// event to arrive while still bounding the replay loop.
+		noInstallationCancelAge: 1 * time.Minute,
+		nameFn:                  defaultNameFn,
+		nowFn:                   time.Now,
 	}
 }
 
@@ -153,13 +161,26 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 	if inst == nil {
-		// No installation for this repo. Almost always means a removal
-		// webhook (installation:deleted / installation_repositories:
-		// removed) raced this dispatch and won — the cancel pass that
-		// runs alongside RemoveRepoInstallation may have missed our row
-		// because the queued webhook inserted it after the cancel
-		// query. Cancel here so the row stops looping through replay.
-		s.log.Info("dispatch: no installation for repo; cancelling job", "job_id", jobID, "repo", job.Repo)
+		// No installation for this repo. Two ways to land here:
+		//   (a) Installation removal raced us and won — the cancel
+		//       pass missed this row, dispatch should cancel.
+		//   (b) The workflow_job:queued webhook arrived BEFORE the
+		//       installation_repositories:added webhook for the same
+		//       repo (out-of-order delivery is documented). Cancelling
+		//       here would kill a real job whose install event is
+		//       seconds away.
+		//
+		// Distinguish by row age: a fresh row (just inserted) gets the
+		// benefit of the doubt and stays pending so the next replay
+		// tick can re-dispatch it. An old row (past noInstallationCancelAge)
+		// is treated as case (a) and cancelled to break the replay
+		// loop.
+		age := s.nowFn().Sub(job.ReceivedAt)
+		if age < s.noInstallationCancelAge {
+			s.log.Warn("dispatch: no installation for repo; leaving young pending row for next replay", "job_id", jobID, "repo", job.Repo, "age", age)
+			return
+		}
+		s.log.Info("dispatch: no installation for repo; cancelling stale job", "job_id", jobID, "repo", job.Repo, "age", age)
 		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
 			s.log.Error("dispatch: MarkJobCompleted(cancelled) after missing installation failed", "job_id", jobID, "err", err)
 		}

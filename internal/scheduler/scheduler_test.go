@@ -357,12 +357,9 @@ func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
 	}
 }
 
-// dispatch must not just leave the row pending forever — that's the
-// race symptom: a queued webhook lost the cancel pass triggered by an
-// installation removal, the row sits pending, replay picks it up next
-// tick, dispatch loops on a missing installation forever. Cancelling
-// here breaks the loop.
-func TestDispatch_NoInstallation_CancelsJob(t *testing.T) {
+// Stale row (received past the age gate) with no installation gets
+// cancelled — breaks the replay-loop case from the original race fix.
+func TestDispatch_NoInstallation_StaleRow_Cancels(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedPendingJob(t, st, 1, "owner/repo") // no installation row
@@ -370,6 +367,10 @@ func TestDispatch_NoInstallation_CancelsJob(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// Force "now" to 1h after the row's ReceivedAt — well past the
+	// 1-min noInstallationCancelAge.
+	job, _ := st.GetJob(context.Background(), 1)
+	s.nowFn = func() time.Time { return job.ReceivedAt.Add(1 * time.Hour) }
 
 	s.dispatch(context.Background(), 1)
 
@@ -379,9 +380,39 @@ func TestDispatch_NoInstallation_CancelsJob(t *testing.T) {
 	if ln.calls.Load() != 0 {
 		t.Fatalf("Launch called without an installation: %d", ln.calls.Load())
 	}
-	job, _ := st.GetJob(context.Background(), 1)
+	job, _ = st.GetJob(context.Background(), 1)
 	if job == nil || job.Status != "completed" || job.Conclusion != "cancelled" {
 		t.Fatalf("job = %+v, want completed/cancelled", job)
+	}
+}
+
+// Young row (received within the age gate) with no installation
+// stays pending — defends against the out-of-order webhook delivery
+// case where workflow_job:queued lands BEFORE
+// installation_repositories:added for the same repo. Cancelling here
+// would kill a real job whose install event is seconds away.
+func TestDispatch_NoInstallation_YoungRow_StaysPending(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// "Now" is the same instant the row was received → age = 0.
+	s.nowFn = func() time.Time {
+		j, _ := st.GetJob(context.Background(), 1)
+		return j.ReceivedAt
+	}
+
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch called without an installation: %d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status != "pending" {
+		t.Fatalf("young row prematurely cancelled: %+v", job)
 	}
 }
 
