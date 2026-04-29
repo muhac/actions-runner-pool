@@ -134,7 +134,7 @@ Validation: at `Load()`, `strings.Contains` check for each `{{.X}}` literal. Fai
 
 #### Things users *can* break themselves (and we don't second-guess)
 
-- Drop `EPHEMERAL=1` → runner becomes long-lived, stays after the job completes. Reconciliation will eventually clean it up via the idle timeout, but ghost runner counts will grow. *User's call.*
+- Drop `EPHEMERAL=1` → runner becomes long-lived, stays after the job completes. The reconciler's `RUNNER_MAX_LIFETIME` sweep (default 2h) eventually force-removes it, but you'll burn cap slots until then. *User's call.*
 - Drop `--rm` → exited containers accumulate. *User's housekeeping problem.*
 - Use a non-`myoung34` image → must replicate the same env-var contract (`REPO_URL`, `RUNNER_TOKEN`, etc.) for things to work. Documented but not enforced.
 
