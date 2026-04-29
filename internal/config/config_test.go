@@ -346,6 +346,58 @@ func TestLoad_RunnerLabels(t *testing.T) {
 	}
 }
 
+func TestLoad_AllowPublicRepos(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want bool
+	}{
+		{"unset-defaults-false", "", false},
+		{"true", "true", true},
+		{"true-case-insensitive", "TRUE", true},
+		{"false", "false", false},
+		{"anything-else-false", "yes", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"BASE_URL": "https://example.test"}
+			if tc.set != "" {
+				env["ALLOW_PUBLIC_REPOS"] = tc.set
+			}
+			withEnv(t, env, func() {
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if c.AllowPublicRepos != tc.want {
+					t.Errorf("AllowPublicRepos = %v, want %v", c.AllowPublicRepos, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func TestLoad_RepoAllowlist(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":       "https://example.test",
+		"REPO_ALLOWLIST": " Alice/Public, ,bob/api,",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !equalStrings(c.RepoAllowlist, []string{"Alice/Public", "bob/api"}) {
+			t.Errorf("RepoAllowlist = %v", c.RepoAllowlist)
+		}
+		if _, ok := c.RepoAllowlistSet["alice/public"]; !ok {
+			t.Errorf("RepoAllowlistSet missing alice/public: %+v", c.RepoAllowlistSet)
+		}
+		if _, ok := c.RepoAllowlistSet["bob/api"]; !ok {
+			t.Errorf("RepoAllowlistSet missing bob/api: %+v", c.RepoAllowlistSet)
+		}
+	})
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

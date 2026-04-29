@@ -58,6 +58,9 @@ Pick the repos (or "All repositories") you want runners for and submit.
 > who can open a PR can run arbitrary code on your machine.
 > Only install the App on **private** repos you trust,
 > and run gharp on a **dedicated VM / cloud instance / homelab node**.
+> gharp drops public-repo `workflow_job` webhooks by default. To opt in,
+> set `ALLOW_PUBLIC_REPOS=true` for all public repos, or use
+> `REPO_ALLOWLIST=owner/repo` to bypass the guard for selected public repos.
 
 ### 4. Add a workflow
 
