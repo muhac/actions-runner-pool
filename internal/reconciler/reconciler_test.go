@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,28 @@ func (f *fakeStore) InstallationForRepo(ctx context.Context, repo string) (*stor
 		return nil, nil
 	}
 	return f.installations[repo], nil
+}
+
+// ListAllInstallationRepos: tests opt in by setting f.installations
+// (the same map InstallationForRepo reads). Iteration order matters
+// for some assertions, so sort by repo name.
+func (f *fakeStore) ListAllInstallationRepos(ctx context.Context) ([]store.RepoInstallation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	repos := make([]string, 0, len(f.installations))
+	for r := range f.installations {
+		repos = append(repos, r)
+	}
+	sort.Strings(repos)
+	out := make([]store.RepoInstallation, 0, len(repos))
+	for _, r := range repos {
+		inst := f.installations[r]
+		if inst == nil {
+			continue
+		}
+		out = append(out, store.RepoInstallation{Repo: r, InstallationID: inst.ID})
+	}
+	return out, nil
 }
 
 type fakeDocker struct {
@@ -411,9 +434,10 @@ func TestReconcile_GitHubGhostSweep_DeletesUnknownRunners(t *testing.T) {
 	}
 }
 
-// No active rows -> no installation lookup, no token mint. The sweep
-// short-circuits cheaply when the deployment is idle.
-func TestReconcile_GitHubGhostSweep_NoActiveRows_NoOp(t *testing.T) {
+// No installed repos at all (no app, no installations) -> no work,
+// no token mint. The sweep short-circuits cheaply when there's
+// literally nothing to inspect.
+func TestReconcile_GitHubGhostSweep_NoInstalledRepos_NoOp(t *testing.T) {
 	st := &fakeStore{appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")}}
 	dk := &fakeDocker{}
 	gh := &fakeGH{}
@@ -422,6 +446,31 @@ func TestReconcile_GitHubGhostSweep_NoActiveRows_NoOp(t *testing.T) {
 	if gh.jwtCalls != 0 || gh.instTokenCalls != 0 || gh.listCalls != 0 {
 		t.Fatalf("idle deployment burned API: jwt=%d inst=%d list=%d",
 			gh.jwtCalls, gh.instTokenCalls, gh.listCalls)
+	}
+}
+
+// Repo has zero active rows but is in installation_repos -> the sweep
+// must still query GitHub for that repo and clear any prefixed ghost
+// runners. This is the "deployment goes idle, then GitHub-side
+// ghosts pile up" failure mode.
+func TestReconcile_GitHubGhostSweep_IdleRepoWithGhost_Cleared(t *testing.T) {
+	st := &fakeStore{
+		// No active rows.
+		rows:          nil,
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/repo": {
+			{ID: 42, Name: "gharp-stale-deadbeef", Status: "offline", Busy: false},
+			{ID: 43, Name: "other-system-runner", Status: "online", Busy: false},
+		},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background())
+	if len(gh.deleted) != 1 || gh.deleted[0] != (deletedRunner{"alice/repo", 42}) {
+		t.Fatalf("expected DELETE of gharp-stale-deadbeef from alice/repo, got %+v", gh.deleted)
 	}
 }
 

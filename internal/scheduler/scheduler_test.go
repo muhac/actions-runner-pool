@@ -1067,6 +1067,9 @@ func (e *errStore) RemoveRepoInstallation(context.Context, string) error { panic
 func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installation, error) {
 	panic("unused")
 }
+func (e *errStore) ListAllInstallationRepos(context.Context) ([]store.RepoInstallation, error) {
+	panic("unused")
+}
 func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
 func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
 func (e *errStore) MarkJobDispatched(context.Context, int64) error            { panic("unused") }

@@ -147,6 +147,28 @@ func (s *SQLite) RemoveRepoInstallation(ctx context.Context, repoFullName string
 	return err
 }
 
+// ListAllInstallationRepos returns every (repo, installation) the App
+// is installed on. Used by the GitHub-side ghost sweep so it can
+// query repos that currently have no active runner row — without
+// this, ghosts left behind after a deployment goes idle would never
+// be cleared until GitHub auto-expires them.
+func (s *SQLite) ListAllInstallationRepos(ctx context.Context) ([]RepoInstallation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT repo, installation_id FROM installation_repos ORDER BY repo`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoInstallation
+	for rows.Next() {
+		var ri RepoInstallation
+		if err := rows.Scan(&ri.Repo, &ri.InstallationID); err != nil {
+			return nil, err
+		}
+		out = append(out, ri)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLite) InstallationForRepo(ctx context.Context, repoFullName string) (*Installation, error) {
 	const q = `
 SELECT i.id, i.account_id, i.account_login, i.account_type, i.created_at

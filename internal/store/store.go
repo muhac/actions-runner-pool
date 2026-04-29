@@ -12,6 +12,11 @@ type Store interface {
 	UpsertRepoInstallation(ctx context.Context, repoFullName string, installationID int64) error
 	RemoveRepoInstallation(ctx context.Context, repoFullName string) error
 	InstallationForRepo(ctx context.Context, repoFullName string) (*Installation, error)
+	// ListAllInstallationRepos returns every (repo, installation) the
+	// App is installed on. Used by the GitHub-side ghost sweep to
+	// enumerate repos that may have stale runner registrations even
+	// when the local DB has no active runner row for them.
+	ListAllInstallationRepos(ctx context.Context) ([]RepoInstallation, error)
 
 	InsertJobIfNew(ctx context.Context, j *Job) (inserted bool, err error)
 	GetJob(ctx context.Context, jobID int64) (*Job, error)

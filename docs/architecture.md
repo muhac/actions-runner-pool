@@ -278,11 +278,11 @@ every 60s:
 
 every 5min (only if a GitHubClient is wired):
     # GitHub-side ghost sweep
-    group active rows by repo
-    for each repo:
+    for each (repo, installation_id) in installation_repos:    # iterate ALL installed repos, not just those with active rows
         mint installation_token (cached per installation_id within tick)
+        ours = active runner names for this repo (may be empty)
         for each runner in GET /repos/{repo}/actions/runners:
-            if name has our prefix and not in our active set and not busy:
+            if name has our prefix and not in ours and not busy:
                 DELETE /repos/{repo}/actions/runners/{id}
 ```
 

@@ -21,6 +21,14 @@ type Installation struct {
 	CreatedAt   time.Time
 }
 
+// RepoInstallation is one row of the installation_repos join table —
+// "this App is installed on this repo via this installation". Used by
+// the GitHub-side ghost sweep to enumerate all repos the App can see.
+type RepoInstallation struct {
+	Repo           string
+	InstallationID int64
+}
+
 type Job struct {
 	ID         int64
 	Repo       string

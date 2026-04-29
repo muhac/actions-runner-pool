@@ -91,7 +91,13 @@ type Store interface {
 	// call these — passing a Store that returns errors here is fine
 	// when GitHub-side cleanup is disabled.
 	GetAppConfig(ctx context.Context) (*store.AppConfig, error)
-	InstallationForRepo(ctx context.Context, repoFullName string) (*store.Installation, error)
+	// ListAllInstallationRepos drives the GitHub-side sweep. Iterating
+	// every installed repo (rather than only repos with active rows)
+	// catches ghosts left behind after a deployment goes idle — the
+	// docker side of those ghosts is already cleaned up locally, so
+	// without this iteration GitHub would hold the registration
+	// until its own ~30-day timeout.
+	ListAllInstallationRepos(ctx context.Context) ([]store.RepoInstallation, error)
 }
 
 // GitHubClient is the subset of *github.Client the GitHub-side ghost
@@ -317,16 +323,21 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 	return removed
 }
 
-// sweepGitHubGhostRunners walks active runner rows, groups by repo,
-// and for each unique repo calls GitHub's /actions/runners API. Any
-// runner GitHub still has registered that doesn't appear in our
-// active-runners table by name is force-deregistered (DELETE). This
-// catches runners that:
+// sweepGitHubGhostRunners walks every repo the App is installed on
+// and, for each one, calls GitHub's /actions/runners API. Any runner
+// whose name starts with `containerNamePrefix` and isn't claimed by
+// an active row in our DB is force-deregistered. This catches
+// runners that:
 //   - exited their EPHEMERAL job cleanly but `--rm` removed the
 //     container before our completed webhook updated the DB (the
 //     usual cause of GitHub-side ghost rows accumulating);
 //   - we never persisted because of a process crash mid-launch;
 //   - belong to long-since-removed deployments sharing this App.
+//
+// Iteration source is `ListAllInstallationRepos` (mirroring the
+// docker prefix sweep's "list everything matching, ignore DB"
+// approach) — limiting to repos with active rows would miss ghosts
+// left behind after a deployment goes idle.
 //
 // Cost is bounded: one install-token mint + one GET /runners + one
 // DELETE per ghost per unique repo, every githubSweepPeriod (default
@@ -336,16 +347,25 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 	if r.gh == nil {
 		return
 	}
+	repos, err := r.store.ListAllInstallationRepos(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: ListAllInstallationRepos failed", "err", err)
+		return
+	}
+	if len(repos) == 0 {
+		r.log.Debug("reconciler/github: no installed repos; skipping sweep")
+		return
+	}
+
 	rows, err := r.store.ListActiveRunners(ctx)
 	if err != nil {
 		r.log.Error("reconciler/github: ListActiveRunners failed", "err", err)
 		return
 	}
-
-	// Build (repo -> set of runner names we own). A runner name we
-	// own is preserved even if its DB row is in 'finished' — but
-	// ListActiveRunners filters those out, so the set is just the
-	// active rows.
+	// Build (repo -> set of runner names we own from active rows).
+	// Repos absent from `known` mean "no active runners" — for those
+	// repos, every prefixed runner GitHub reports is a candidate for
+	// deletion.
 	known := map[string]map[string]struct{}{}
 	for _, row := range rows {
 		set, ok := known[row.Repo]
@@ -354,19 +374,6 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 			known[row.Repo] = set
 		}
 		set[row.RunnerName] = struct{}{}
-	}
-
-	// We also need to sweep repos that have ZERO active rows but
-	// have install_repos mapping (otherwise a deployment with all
-	// runners finished could leave ghosts behind forever). For now,
-	// limit the sweep to repos with at least one active row — extending
-	// to all known repos is a future tightening that needs tracking
-	// "repos we've ever launched in" without scanning the full
-	// installation list every tick.
-
-	if len(known) == 0 {
-		r.log.Debug("reconciler/github: no active rows; skipping sweep")
-		return
 	}
 
 	appCfg, err := r.store.GetAppConfig(ctx)
@@ -380,35 +387,27 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 		return
 	}
 
-	// Per-installation token cache (repo→install→token). Multiple
-	// repos under the same installation share a token — minting per
-	// repo would burn quota for no benefit.
+	// Per-installation token cache. Repos sharing an installation
+	// share the same token — minting per repo would burn quota for
+	// no benefit.
 	tokens := map[int64]string{}
 	totalDeleted := 0
-	for repo, ours := range known {
-		inst, err := r.store.InstallationForRepo(ctx, repo)
-		if err != nil {
-			r.log.Error("reconciler/github: InstallationForRepo failed", "repo", repo, "err", err)
-			continue
-		}
-		if inst == nil {
-			r.log.Debug("reconciler/github: no installation for repo; skipping", "repo", repo)
-			continue
-		}
-		tok, ok := tokens[inst.ID]
+	for _, ri := range repos {
+		tok, ok := tokens[ri.InstallationID]
 		if !ok {
-			tok, err = r.gh.InstallationToken(ctx, jwt, inst.ID)
+			tok, err = r.gh.InstallationToken(ctx, jwt, ri.InstallationID)
 			if err != nil {
-				r.log.Error("reconciler/github: InstallationToken failed", "repo", repo, "installation_id", inst.ID, "err", err)
+				r.log.Error("reconciler/github: InstallationToken failed", "repo", ri.Repo, "installation_id", ri.InstallationID, "err", err)
 				continue
 			}
-			tokens[inst.ID] = tok
+			tokens[ri.InstallationID] = tok
 		}
-		runners, err := r.gh.ListRepoRunners(ctx, tok, repo)
+		runners, err := r.gh.ListRepoRunners(ctx, tok, ri.Repo)
 		if err != nil {
-			r.log.Error("reconciler/github: ListRepoRunners failed", "repo", repo, "err", err)
+			r.log.Error("reconciler/github: ListRepoRunners failed", "repo", ri.Repo, "err", err)
 			continue
 		}
+		ours := known[ri.Repo] // nil set is fine — no active rows for this repo
 		for _, gr := range runners {
 			// Only touch runners whose name matches our prefix —
 			// otherwise we'd reach into other deployments sharing
@@ -424,14 +423,14 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 			// jobs, our DB has it; if it's busy with someone
 			// else's job, deletion would interrupt them.
 			if gr.Busy {
-				r.log.Debug("reconciler/github: skipping busy ghost runner", "repo", repo, "runner", gr.Name)
+				r.log.Debug("reconciler/github: skipping busy ghost runner", "repo", ri.Repo, "runner", gr.Name)
 				continue
 			}
-			if err := r.gh.DeleteRepoRunner(ctx, tok, repo, gr.ID); err != nil {
-				r.log.Error("reconciler/github: DeleteRepoRunner failed", "repo", repo, "runner_id", gr.ID, "runner_name", gr.Name, "err", err)
+			if err := r.gh.DeleteRepoRunner(ctx, tok, ri.Repo, gr.ID); err != nil {
+				r.log.Error("reconciler/github: DeleteRepoRunner failed", "repo", ri.Repo, "runner_id", gr.ID, "runner_name", gr.Name, "err", err)
 				continue
 			}
-			r.log.Info("reconciler/github: deregistered ghost runner", "repo", repo, "runner_id", gr.ID, "runner_name", gr.Name)
+			r.log.Info("reconciler/github: deregistered ghost runner", "repo", ri.Repo, "runner_id", gr.ID, "runner_name", gr.Name)
 			totalDeleted++
 		}
 	}
