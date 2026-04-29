@@ -1074,6 +1074,9 @@ func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) (boo
 	panic("unused")
 }
 func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
+func (e *errStore) CancelJobIfPending(context.Context, int64) (bool, error) {
+	panic("unused")
+}
 func (e *errStore) CancelPendingJobsForRepo(context.Context, string) (int64, error) {
 	panic("unused")
 }

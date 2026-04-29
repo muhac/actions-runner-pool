@@ -242,6 +242,26 @@ func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion s
 	return err
 }
 
+// CancelJobIfPending status-guards the cancel: only rows still in
+// 'pending'/'dispatched' transition. A concurrent
+// `workflow_job: completed` webhook that already wrote the real
+// conclusion is not overwritten. Returns whether a row actually
+// transitioned so callers can log the no-op case.
+func (s *SQLite) CancelJobIfPending(ctx context.Context, jobID int64) (bool, error) {
+	const q = `UPDATE jobs SET status='completed', conclusion='cancelled',
+		updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status IN ('pending','dispatched')`
+	res, err := s.db.ExecContext(ctx, q, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // CancelPendingJobsForRepo transitions every still-dispatchable row
 // for the repo (status in 'pending'/'dispatched') to
 // completed/cancelled. The status filter is what makes this safe to

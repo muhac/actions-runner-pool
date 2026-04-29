@@ -30,6 +30,14 @@ type Store interface {
 	// flipping a finished runner back to busy) on no-op updates.
 	MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) (advanced bool, err error)
 	MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error
+	// CancelJobIfPending transitions a single job to
+	// completed/cancelled but ONLY if its current status is still
+	// 'pending' or 'dispatched'. Used by dispatch's defensive cancel
+	// paths (no-installation, GitHub 404-confirmed) where a real
+	// workflow_job: completed webhook may have already written the
+	// true conclusion concurrently — we must not overwrite it.
+	// Returns whether a row was actually transitioned.
+	CancelJobIfPending(ctx context.Context, jobID int64) (cancelled bool, err error)
 	// CancelPendingJobsForRepo marks every pending/dispatched job for
 	// the repo as completed/cancelled. Used when an installation is
 	// removed (App uninstalled, repo unselected) so dispatch stops

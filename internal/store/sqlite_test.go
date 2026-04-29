@@ -398,6 +398,54 @@ func TestUpdateRunnerStatusByName_MatchesRunnerNameNotContainer(t *testing.T) {
 	}
 }
 
+// CancelJobIfPending must NOT overwrite a row that's already
+// terminal — that's the entire point: a concurrent webhook may have
+// written the real conclusion (success/failure/cancelled), and
+// dispatch's defensive cancel paths must yield to that truth.
+func TestCancelJobIfPending_SkipsTerminalRows(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	rows := []*Job{
+		{ID: 1, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "1", Status: "pending"},
+		{ID: 2, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "2", Status: "dispatched"},
+		{ID: 3, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "3", Status: "in_progress"},
+		{ID: 4, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "4", Status: "completed", Conclusion: "success"},
+	}
+	for _, j := range rows {
+		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+			t.Fatalf("seed %d: %v", j.ID, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		id            int64
+		wantCancelled bool
+		wantStatus    string
+		wantConcl     string
+	}{
+		{1, true, "completed", "cancelled"},
+		{2, true, "completed", "cancelled"},
+		{3, false, "in_progress", ""},
+		{4, false, "completed", "success"}, // must not overwrite real conclusion
+	} {
+		got, err := s.CancelJobIfPending(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("id=%d: %v", tc.id, err)
+		}
+		if got != tc.wantCancelled {
+			t.Errorf("id=%d cancelled=%v, want %v", tc.id, got, tc.wantCancelled)
+		}
+		j, err := s.GetJob(ctx, tc.id)
+		if err != nil || j == nil {
+			t.Fatalf("id=%d get: %v / %v", tc.id, err, j)
+		}
+		if j.Status != tc.wantStatus || j.Conclusion != tc.wantConcl {
+			t.Errorf("id=%d after cancel: status=%q conclusion=%q, want status=%q conclusion=%q",
+				tc.id, j.Status, j.Conclusion, tc.wantStatus, tc.wantConcl)
+		}
+	}
+}
+
 // Repo-scoped cancel: only pending/dispatched rows for that repo
 // transition; rows for other repos and rows already in terminal states
 // must be left alone (otherwise we'd retroactively rewrite history of

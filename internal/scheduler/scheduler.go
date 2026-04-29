@@ -181,8 +181,10 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			return
 		}
 		s.log.Info("dispatch: no installation for repo; cancelling stale job", "job_id", jobID, "repo", job.Repo, "age", age)
-		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
-			s.log.Error("dispatch: MarkJobCompleted(cancelled) after missing installation failed", "job_id", jobID, "err", err)
+		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+			s.log.Error("dispatch: CancelJobIfPending after missing installation failed", "job_id", jobID, "err", err)
+		} else if !cancelled {
+			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
 		}
 		return
 	}
@@ -247,8 +249,10 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			break
 		}
 		s.log.Info("dispatch: 404 confirmed; marking cancelled", "job_id", jobID, "repo", job.Repo)
-		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
-			s.log.Error("dispatch: MarkJobCompleted(cancelled) after 404 failed", "job_id", jobID, "err", err)
+		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+			s.log.Error("dispatch: CancelJobIfPending after 404 failed", "job_id", jobID, "err", err)
+		} else if !cancelled {
+			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
 		}
 		return
 	case live.Status != "queued":

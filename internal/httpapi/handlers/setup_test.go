@@ -120,6 +120,13 @@ func (f *fakeStore) CancelPendingJobsForRepo(_ context.Context, repo string) (in
 	return 0, nil
 }
 
+func (f *fakeStore) CancelJobIfPending(_ context.Context, jobID int64) (bool, error) {
+	// Webhook handlers don't call this; only dispatch does. Embedded
+	// store.Store would panic via nil deref if a future test does, so
+	// surface a clear panic instead.
+	panic("CancelJobIfPending called on handler test fake")
+}
+
 func (f *fakeStore) UpdateRunnerStatusByName(_ context.Context, runnerName, status string) error {
 	f.updatedRunnerByName = append(f.updatedRunnerByName, runnerStatusUpdate{runnerName, status})
 	return nil
