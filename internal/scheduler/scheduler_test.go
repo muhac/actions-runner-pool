@@ -30,6 +30,9 @@ func newTestScheduler(t *testing.T, cfg *config.Config, st store.Store, gh GitHu
 	// waiting a real minute. Tests that don't care still pay only the
 	// nil PendingJobs query cost per tick.
 	s.replayPeriod = 20 * time.Millisecond
+	// Skip the 404-confirm sleep so tests that exercise the cancel
+	// path don't burn 2 seconds per case.
+	s.notFoundConfirmDelay = 0
 	s.nameFn = func(jobID int64) (string, string) {
 		name := "test-runner"
 		return name, name
@@ -57,6 +60,11 @@ type spyGH struct {
 	regErr      error
 	wfJobErr    error
 	wfJobReply  *github.WorkflowJobStatus
+	// wfJobReplies, when non-empty, is consumed in order: the Nth
+	// WorkflowJob call returns the Nth reply. Lets tests exercise the
+	// "second read disagrees with first" 404-confirm path. Empty falls
+	// back to wfJobReply (or the queued default).
+	wfJobReplies []*github.WorkflowJobStatus
 	mu          sync.Mutex
 	callOrder   []string
 }
@@ -108,6 +116,14 @@ func (g *spyGH) WorkflowJob(ctx context.Context, instTok, repo string, jobID int
 	if g.wfJobErr != nil {
 		return nil, g.wfJobErr
 	}
+	g.mu.Lock()
+	if len(g.wfJobReplies) > 0 {
+		reply := g.wfJobReplies[0]
+		g.wfJobReplies = g.wfJobReplies[1:]
+		g.mu.Unlock()
+		return reply, nil
+	}
+	g.mu.Unlock()
 	if g.wfJobReply != nil {
 		return g.wfJobReply, nil
 	}
@@ -845,28 +861,60 @@ func TestDispatch_PreLaunch_GitHubNotQueued_AbortsBeforeInsert(t *testing.T) {
 	}
 }
 
-// 404 from GitHub means the job is gone for good. Policy: mark it
-// cancelled ourselves so PendingJobs replay doesn't keep retrying.
+// 404 confirmed on retry → mark cancelled. Two consecutive 404s mean
+// the job is genuinely gone, not a momentary GitHub flake.
 func TestDispatch_PreLaunch_GitHub404_MarksCancelled(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
 	seedPendingJob(t, st, 1, "owner/repo")
 
-	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{NotFound: true}}
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{NotFound: true},
+	}}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(4), st, gh, ln)
 	s.dispatch(context.Background(), 1)
 
 	if ln.calls.Load() != 0 {
-		t.Fatalf("Launch invoked despite 404: calls=%d", ln.calls.Load())
+		t.Fatalf("Launch invoked despite confirmed 404: calls=%d", ln.calls.Load())
+	}
+	if gh.wfJobCalls.Load() != 2 {
+		t.Fatalf("expected 2 WorkflowJob calls (initial + confirm), got %d", gh.wfJobCalls.Load())
 	}
 	job, err := st.GetJob(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if job.Status != "completed" || job.Conclusion != "cancelled" {
-		t.Fatalf("job after 404 = status=%q conclusion=%q, want completed/cancelled", job.Status, job.Conclusion)
+		t.Fatalf("job after confirmed 404 = status=%q conclusion=%q, want completed/cancelled", job.Status, job.Conclusion)
+	}
+}
+
+// First call returns 404, second returns queued — must NOT cancel.
+// Catches the failure mode where a single transient GitHub 404 (CDN
+// edge propagation, brief outage) wrongly kills a real queued job.
+func TestDispatch_PreLaunch_GitHub404_NotConfirmed_ProceedsToLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{Status: "queued"},
+	}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 1 {
+		t.Fatalf("Launch should run when 404 isn't confirmed: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status == "completed" {
+		t.Fatalf("job wrongly cancelled on unconfirmed 404: %+v", job)
 	}
 }
 

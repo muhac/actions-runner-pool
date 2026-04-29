@@ -39,22 +39,24 @@ type Scheduler struct {
 	jobCh  chan int64
 	log    *slog.Logger
 
-	capBackoff    time.Duration
-	replayPeriod  time.Duration
-	nameFn        func(jobID int64) (string, string)
+	capBackoff           time.Duration
+	replayPeriod         time.Duration
+	notFoundConfirmDelay time.Duration
+	nameFn               func(jobID int64) (string, string)
 }
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cfg:          cfg,
-		store:        st,
-		gh:           gh,
-		runner:       rn,
-		jobCh:        make(chan int64, 256),
-		log:          log,
-		capBackoff:   2 * time.Second,
-		replayPeriod: 1 * time.Minute,
-		nameFn:       defaultNameFn,
+		cfg:                  cfg,
+		store:                st,
+		gh:                   gh,
+		runner:               rn,
+		jobCh:                make(chan int64, 256),
+		log:                  log,
+		capBackoff:           2 * time.Second,
+		replayPeriod:         1 * time.Minute,
+		notFoundConfirmDelay: 2 * time.Second,
+		nameFn:               defaultNameFn,
 	}
 }
 
@@ -202,10 +204,19 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		// real jobs never dispatch.
 		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)
 	case live.NotFound:
-		// Job was deleted/inaccessible. Mark cancelled so the row stops
-		// participating in replay; conclusion="cancelled" matches the
-		// shape of a webhook-driven cancellation.
-		s.log.Info("dispatch: GitHub returned 404 for job; marking cancelled", "job_id", jobID, "repo", job.Repo)
+		// Job was deleted/inaccessible. Confirm with a single retry
+		// before acting — a single 404 from a brief GitHub outage or
+		// CDN edge propagation could otherwise wrongly cancel a real
+		// queued job. If the second read still says NotFound, treat as
+		// terminal: mark cancelled so the row stops participating in
+		// replay. conclusion="cancelled" matches the shape of a
+		// webhook-driven cancellation.
+		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
+		if !confirm404(ctx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay) {
+			s.log.Info("dispatch: 404 not confirmed on retry; proceeding optimistically", "job_id", jobID)
+			break
+		}
+		s.log.Info("dispatch: 404 confirmed; marking cancelled", "job_id", jobID, "repo", job.Repo)
 		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
 			s.log.Error("dispatch: MarkJobCompleted(cancelled) after 404 failed", "job_id", jobID, "err", err)
 		}
@@ -275,4 +286,25 @@ func defaultNameFn(jobID int64) (string, string) {
 	}
 	name := fmt.Sprintf("gharp-%d-%s", jobID, hex.EncodeToString(b[:]))
 	return name, name
+}
+
+// confirm404 re-reads the workflow job after a short delay. Returns
+// true only if the second read also surfaces NotFound — protecting
+// against a single transient 404 (CDN edge propagation, brief GitHub
+// outage) wrongly cancelling a real queued job. Any other outcome
+// (back to queued, or a transport error) returns false so the caller
+// can fall through to the optimistic path.
+func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) bool {
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(delay):
+		}
+	}
+	live, err := gh.WorkflowJob(ctx, instTok, repo, jobID)
+	if err != nil {
+		return false
+	}
+	return live.NotFound
 }
