@@ -30,6 +30,7 @@ type fakeStore struct {
 	insertJobErr             error
 	markedInProgress         []markedInProgress
 	markedCompleted          []markedCompleted
+	cancelledForRepo         []string
 	updatedRunnerByName      []runnerStatusUpdate
 }
 
@@ -112,6 +113,18 @@ func (f *fakeStore) MarkJobInProgress(_ context.Context, jobID, runnerID int64, 
 func (f *fakeStore) MarkJobCompleted(_ context.Context, jobID int64, conclusion string) error {
 	f.markedCompleted = append(f.markedCompleted, markedCompleted{jobID, conclusion})
 	return nil
+}
+
+func (f *fakeStore) CancelPendingJobsForRepo(_ context.Context, repo string) (int64, error) {
+	f.cancelledForRepo = append(f.cancelledForRepo, repo)
+	return 0, nil
+}
+
+func (f *fakeStore) CancelJobIfPending(_ context.Context, jobID int64) (bool, error) {
+	// Webhook handlers don't call this; only dispatch does. Embedded
+	// store.Store would panic via nil deref if a future test does, so
+	// surface a clear panic instead.
+	panic("CancelJobIfPending called on handler test fake")
 }
 
 func (f *fakeStore) UpdateRunnerStatusByName(_ context.Context, runnerName, status string) error {

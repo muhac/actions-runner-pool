@@ -69,6 +69,14 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 				"token":      "reg-token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 			})
+		case strings.Contains(r.URL.Path, "/actions/jobs/"):
+			// Pre-launch GitHub truth check; return queued so
+			// dispatch proceeds.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":     "queued",
+				"conclusion": nil,
+			})
 		default:
 			t.Errorf("unexpected GitHub call: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected", http.StatusInternalServerError)
@@ -125,6 +133,9 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=4",
 		"LOG_LEVEL=warn",
+		// Per-test prefix so the binary's reconciler doesn't reach
+		// into other gharp containers on the host.
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -237,17 +248,22 @@ func TestIntegration_StartupReplay_RecoversPendingJob(t *testing.T) {
 
 	var regHits atomic.Int64
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/app/installations/77/access_tokens":
+		switch {
+		case r.URL.Path == "/app/installations/77/access_tokens":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token":      "inst-token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 			})
-		case "/repos/bob/repo/actions/runners/registration-token":
+		case r.URL.Path == "/repos/bob/repo/actions/runners/registration-token":
 			regHits.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token":      "reg-token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			})
+		case strings.Contains(r.URL.Path, "/actions/jobs/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":     "queued",
+				"conclusion": nil,
 			})
 		default:
 			http.Error(w, "unexpected: "+r.URL.Path, http.StatusInternalServerError)
@@ -312,6 +328,7 @@ func TestIntegration_StartupReplay_RecoversPendingJob(t *testing.T) {
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=4",
 		"LOG_LEVEL=warn",
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
 	)
 	stderr, _ := cmd.StderrPipe()
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
@@ -420,6 +437,11 @@ func bootBinary(t *testing.T, ghURL string, extraEnv map[string]string) bootResu
 		"RUNNER_COMMAND":         string(defaultRunnerCmd),
 		"MAX_CONCURRENT_RUNNERS": "4",
 		"LOG_LEVEL":              "warn",
+		// Confine the reconciler's orphan sweep to a per-test
+		// namespace so the binary doesn't reach into other gharp
+		// containers on the host (notably the self-hosted runner
+		// container the test itself runs in).
+		"RUNNER_NAME_PREFIX": "gharp-it-" + t.Name() + "-",
 	}
 	for k, v := range extraEnv {
 		env[k] = v
@@ -515,6 +537,13 @@ func happyGitHubHandler(instHits, regHits *atomic.Int64) http.HandlerFunc {
 				"token":      "reg-token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 			})
+		case strings.Contains(r.URL.Path, "/actions/jobs/"):
+			// Pre-launch GitHub truth check (added with the
+			// reconciler PR). Return "queued" so dispatch proceeds.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":     "queued",
+				"conclusion": nil,
+			})
 		default:
 			http.Error(w, "unexpected: "+r.URL.Path, http.StatusInternalServerError)
 		}
@@ -553,13 +582,28 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "it.db")
 	// Pre-seed a runner row in 'starting' so the cap is already at 1.
+	// The seed must reference a REAL running container — otherwise
+	// the reconciler's ghost sweep (any active row whose container
+	// `docker inspect` can't find -> mark finished) clears it on the
+	// first tick and the cap-blocks-launch invariant we're asserting
+	// no longer holds. We launch a long-sleeping busybox so the row
+	// stays active for the duration of the test.
+	containerName := "gharp-it-cap-occupied"
+	if out, err := exec.Command("docker", "run", "-d", "--rm",
+		"--name", containerName, "busybox", "sleep", "60").CombinedOutput(); err != nil {
+		t.Skipf("skipping: docker unavailable for cap test seed: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+	})
 	st, err := store.OpenSQLite("file:" + dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.InsertRunner(context.Background(), &store.Runner{
-		ContainerName: "occupied", Repo: "owner/repo",
-		RunnerName: "occupied", Labels: "self-hosted", Status: "starting",
+		ContainerName: containerName, Repo: "owner/repo",
+		RunnerName: containerName, Labels: "self-hosted", Status: "starting",
+		StartedAt:  time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -599,6 +643,10 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 		"STORE_DSN=file:"+dbPath, "GITHUB_API_BASE="+gh.URL,
 		"RUNNER_COMMAND="+string(runnerCmd),
 		"MAX_CONCURRENT_RUNNERS=1", "LOG_LEVEL=warn",
+		// Cap-occupied container name uses 'gharp-it-cap-' prefix; the
+		// reconciler's orphan sweep must use the same so it sees the
+		// pre-seeded container as in-namespace.
+		"RUNNER_NAME_PREFIX=gharp-it-cap-",
 	)
 	stderr, _ := cmd.StderrPipe()
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -29,8 +30,14 @@ func (s *spyEnqueuer) Enqueue(jobID int64) {
 
 func newWebhookHandler(t *testing.T, st store.Store, sch *spyEnqueuer, runnerLabels []string) *WebhookHandler {
 	t.Helper()
+	// Mirror what config.Load does: precompute the lower-cased label
+	// set so the handler reads RunnerLabelSet, not RunnerLabels.
+	set := make(map[string]struct{}, len(runnerLabels))
+	for _, l := range runnerLabels {
+		set[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+	}
 	return &WebhookHandler{
-		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: runnerLabels},
+		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: runnerLabels, RunnerLabelSet: set},
 		Store:     st,
 		Scheduler: sch,
 	}
@@ -137,6 +144,36 @@ func TestWebhook_InstallationRepositoriesAddedRemoved(t *testing.T) {
 	if len(st.removedRepoInstallation) != 1 || st.removedRepoInstallation[0] != "alice/gone" {
 		t.Errorf("expected remove alice/gone, got %+v", st.removedRepoInstallation)
 	}
+	// New behavior: removed repos must also have their pending jobs
+	// cancelled, otherwise dispatch keeps trying to mint a token for
+	// an installation that no longer covers them.
+	if len(st.cancelledForRepo) != 1 || st.cancelledForRepo[0] != "alice/gone" {
+		t.Errorf("expected CancelPendingJobsForRepo(alice/gone), got %+v", st.cancelledForRepo)
+	}
+}
+
+// installation:deleted means the App was uninstalled. We must (a)
+// drop the repo->installation rows for every covered repo so dispatch
+// stops trying to mint tokens, and (b) cancel any still-dispatchable
+// jobs so they don't sit pending forever.
+func TestWebhook_InstallationDeleted_CancelsAndUnmaps(t *testing.T) {
+	body := []byte(`{
+		"action": "deleted",
+		"installation": {"id": 99, "account": {"id": 7, "login": "alice", "type": "User"}},
+		"repositories": [{"full_name": "alice/repo1"}, {"full_name": "alice/repo2"}]
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "installation", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.cancelledForRepo) != 2 {
+		t.Fatalf("expected 2 CancelPendingJobsForRepo calls, got %+v", st.cancelledForRepo)
+	}
+	if len(st.removedRepoInstallation) != 2 {
+		t.Fatalf("expected 2 RemoveRepoInstallation calls, got %+v", st.removedRepoInstallation)
+	}
 }
 
 const queuedJobBody = `{
@@ -199,11 +236,20 @@ func TestWebhook_QueuedStoreError_503AndNoEnqueue(t *testing.T) {
 	}
 }
 
+// Pool advertises [linux] but a job requires [self-hosted, gpu] →
+// must be rejected because gpu is not satisfiable. Pre-superset, this
+// also failed (no overlap). Post-superset, the rejection mechanism
+// changed but the outcome is the same.
 func TestWebhook_LabelFilter_DropsNonMatching(t *testing.T) {
-	body := []byte(queuedJobBody) // labels: ["self-hosted"]
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12346, "labels": ["self-hosted", "gpu"]},
+		"repository": {"full_name": "alice/repo"},
+		"installation": {"id": 99}
+	}`)
 	st := storeWithSecret(testWebhookSecret)
 	sch := &spyEnqueuer{}
-	h := newWebhookHandler(t, st, sch, []string{"gpu"}) // configured doesn't match
+	h := newWebhookHandler(t, st, sch, []string{"linux"}) // gpu unsatisfiable
 	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
@@ -359,5 +405,44 @@ func TestWebhook_EmptySecret_RejectsSignature(t *testing.T) {
 	rr := postWebhook(t, h, "ping", body, sign("", body))
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (empty-secret rejection)", rr.Code)
+	}
+}
+
+// labelsMatch enforces GitHub's cumulative runs-on semantics: a job is
+// only accepted if every required label can be satisfied by this pool.
+// 'self-hosted' is implicit (GitHub auto-assigns it) so it's always
+// satisfiable. Empty configured = serve everything (legacy behavior
+// for operators who haven't set RUNNER_LABELS).
+func TestLabelsMatch_SupersetSemantics(t *testing.T) {
+	makeSet := func(labels []string) map[string]struct{} {
+		out := make(map[string]struct{}, len(labels))
+		for _, l := range labels {
+			out[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+		}
+		return out
+	}
+	cases := []struct {
+		name       string
+		runsOn     []string
+		configured []string
+		want       bool
+	}{
+		// The original failure mode: pool advertises self-hosted, job
+		// also wants gpu — must REJECT (current code accepted it,
+		// leaving a ghost runner GitHub never bound).
+		{"requires-extra-label", []string{"self-hosted", "gpu"}, []string{"self-hosted"}, false},
+		{"all-required-present", []string{"self-hosted", "gpu"}, []string{"gpu"}, true},
+		{"only-self-hosted", []string{"self-hosted"}, []string{}, true},
+		{"empty-configured-serves-everything", []string{"gpu", "linux"}, nil, true},
+		{"case-insensitive-match", []string{"Self-Hosted", "GPU"}, []string{"gpu"}, true},
+		{"explicit-self-hosted-not-required-in-cfg", []string{"self-hosted"}, []string{"linux"}, true},
+		{"job-with-no-labels-trivially-satisfied", nil, []string{"gpu"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := labelsMatch(tc.runsOn, makeSet(tc.configured)); got != tc.want {
+				t.Fatalf("labelsMatch(%v, %v) = %v, want %v", tc.runsOn, tc.configured, got, tc.want)
+			}
+		})
 	}
 }

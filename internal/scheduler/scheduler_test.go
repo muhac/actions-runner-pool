@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/runner"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
@@ -29,6 +30,9 @@ func newTestScheduler(t *testing.T, cfg *config.Config, st store.Store, gh GitHu
 	// waiting a real minute. Tests that don't care still pay only the
 	// nil PendingJobs query cost per tick.
 	s.replayPeriod = 20 * time.Millisecond
+	// Skip the 404-confirm sleep so tests that exercise the cancel
+	// path don't burn 2 seconds per case.
+	s.notFoundConfirmDelay = 0
 	s.nameFn = func(jobID int64) (string, string) {
 		name := "test-runner"
 		return name, name
@@ -50,9 +54,17 @@ type spyGH struct {
 	jwtCalls    atomic.Int64
 	instCalls   atomic.Int64
 	regCalls    atomic.Int64
+	wfJobCalls  atomic.Int64
 	jwtErr      error
 	instErr     error
 	regErr      error
+	wfJobErr    error
+	wfJobReply  *github.WorkflowJobStatus
+	// wfJobReplies, when non-empty, is consumed in order: the Nth
+	// WorkflowJob call returns the Nth reply. Lets tests exercise the
+	// "second read disagrees with first" 404-confirm path. Empty falls
+	// back to wfJobReply (or the queued default).
+	wfJobReplies []*github.WorkflowJobStatus
 	mu          sync.Mutex
 	callOrder   []string
 }
@@ -96,6 +108,27 @@ func (g *spyGH) RegistrationToken(ctx context.Context, instTok, repo string) (st
 		return "", g.regErr
 	}
 	return "reg-token", nil
+}
+
+func (g *spyGH) WorkflowJob(ctx context.Context, instTok, repo string, jobID int64) (*github.WorkflowJobStatus, error) {
+	g.wfJobCalls.Add(1)
+	g.recordCall("WorkflowJob")
+	if g.wfJobErr != nil {
+		return nil, g.wfJobErr
+	}
+	g.mu.Lock()
+	if len(g.wfJobReplies) > 0 {
+		reply := g.wfJobReplies[0]
+		g.wfJobReplies = g.wfJobReplies[1:]
+		g.mu.Unlock()
+		return reply, nil
+	}
+	g.mu.Unlock()
+	if g.wfJobReply != nil {
+		return g.wfJobReply, nil
+	}
+	// Default: still queued -> dispatch proceeds.
+	return &github.WorkflowJobStatus{Status: "queued"}, nil
 }
 
 // --- spy launcher ------------------------------------------------------------
@@ -324,7 +357,9 @@ func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
 	}
 }
 
-func TestDispatch_NoInstallation_StaysPending(t *testing.T) {
+// Stale row (received past the age gate) with no installation gets
+// cancelled — breaks the replay-loop case from the original race fix.
+func TestDispatch_NoInstallation_StaleRow_Cancels(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedPendingJob(t, st, 1, "owner/repo") // no installation row
@@ -332,6 +367,10 @@ func TestDispatch_NoInstallation_StaysPending(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// Force "now" to 1h after the row's ReceivedAt — well past the
+	// 1-min noInstallationCancelAge.
+	job, _ := st.GetJob(context.Background(), 1)
+	s.nowFn = func() time.Time { return job.ReceivedAt.Add(1 * time.Hour) }
 
 	s.dispatch(context.Background(), 1)
 
@@ -341,9 +380,39 @@ func TestDispatch_NoInstallation_StaysPending(t *testing.T) {
 	if ln.calls.Load() != 0 {
 		t.Fatalf("Launch called without an installation: %d", ln.calls.Load())
 	}
+	job, _ = st.GetJob(context.Background(), 1)
+	if job == nil || job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job = %+v, want completed/cancelled", job)
+	}
+}
+
+// Young row (received within the age gate) with no installation
+// stays pending — defends against the out-of-order webhook delivery
+// case where workflow_job:queued lands BEFORE
+// installation_repositories:added for the same repo. Cancelling here
+// would kill a real job whose install event is seconds away.
+func TestDispatch_NoInstallation_YoungRow_StaysPending(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// "Now" is the same instant the row was received → age = 0.
+	s.nowFn = func() time.Time {
+		j, _ := st.GetJob(context.Background(), 1)
+		return j.ReceivedAt
+	}
+
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch called without an installation: %d", ln.calls.Load())
+	}
 	job, _ := st.GetJob(context.Background(), 1)
-	if job == nil || job.Status != "pending" {
-		t.Fatalf("job status=%v, want pending", job)
+	if job.Status != "pending" {
+		t.Fatalf("young row prematurely cancelled: %+v", job)
 	}
 }
 
@@ -385,11 +454,12 @@ func TestDispatch_TokenOrder_CapBeforeJWT(t *testing.T) {
 		t.Fatalf("expected one of each mint, got jwt=%d inst=%d reg=%d",
 			gh.jwtCalls.Load(), gh.instCalls.Load(), gh.regCalls.Load())
 	}
-	// Order within github calls: AppJWT before InstallationToken before RegistrationToken.
-	want := []string{"AppJWT", "InstallationToken", "RegistrationToken"}
+	// Order within github calls: AppJWT before InstallationToken before
+	// RegistrationToken before the pre-launch WorkflowJob check.
+	want := []string{"AppJWT", "InstallationToken", "RegistrationToken", "WorkflowJob"}
 	order := gh.order()
-	if len(order) != 3 {
-		t.Fatalf("callOrder=%v, want 3 entries", order)
+	if len(order) != len(want) {
+		t.Fatalf("callOrder=%v, want %d entries", order, len(want))
 	}
 	for i := range want {
 		if order[i] != want[i] {
@@ -787,6 +857,195 @@ func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
 	}
 }
 
+// --- pre-launch GitHub WorkflowJob check ------------------------------------
+
+// GitHub reports the job is no longer queued (cancelled / claimed by
+// another runner) -> dispatch must abort BEFORE InsertRunner so we
+// don't even create a row to clean up. This is the central correctness
+// claim of the pre-launch check.
+func TestDispatch_PreLaunch_GitHubNotQueued_AbortsBeforeInsert(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{Status: "completed", Conclusion: "cancelled"}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite cancelled job: calls=%d", ln.calls.Load())
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("InsertRunner ran despite cancelled job: %+v", active)
+	}
+	// The job row stays as-is; the upstream webhook will eventually
+	// transition it. We deliberately don't write anything from this branch.
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status != "pending" {
+		t.Fatalf("job status mutated unexpectedly: %q", job.Status)
+	}
+}
+
+// 404 confirmed on retry → mark cancelled. Two consecutive 404s mean
+// the job is genuinely gone, not a momentary GitHub flake.
+func TestDispatch_PreLaunch_GitHub404_MarksCancelled(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{NotFound: true},
+	}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite confirmed 404: calls=%d", ln.calls.Load())
+	}
+	if gh.wfJobCalls.Load() != 2 {
+		t.Fatalf("expected 2 WorkflowJob calls (initial + confirm), got %d", gh.wfJobCalls.Load())
+	}
+	job, err := st.GetJob(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job after confirmed 404 = status=%q conclusion=%q, want completed/cancelled", job.Status, job.Conclusion)
+	}
+}
+
+// First call returns 404, second returns queued — must NOT cancel.
+// Catches the failure mode where a single transient GitHub 404 (CDN
+// edge propagation, brief outage) wrongly kills a real queued job.
+func TestDispatch_PreLaunch_GitHub404_NotConfirmed_ProceedsToLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{Status: "queued"},
+	}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 1 {
+		t.Fatalf("Launch should run when 404 isn't confirmed: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status == "completed" {
+		t.Fatalf("job wrongly cancelled on unconfirmed 404: %+v", job)
+	}
+}
+
+// AuthFailed on the confirm read = the App was uninstalled mid-
+// dispatch (the install token still authenticates fine on the first
+// call but stops working seconds later). Treat as confirmed: cancel
+// the job rather than launching a runner whose install token won't
+// register.
+func TestDispatch_PreLaunch_GitHub404_AuthFailedOnConfirm_Cancels(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{AuthFailed: true},
+	}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite confirmed-via-auth-failure 404: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job after auth-confirmed 404 = %+v, want completed/cancelled", job)
+	}
+}
+
+// ctx cancelled while waiting on the 404-confirm sleep → dispatch
+// must abandon, NOT fall through to InsertRunner/Launch with a dying
+// ctx (which would leave a half-created orphan visible to the orphan
+// sweep only after the grace window).
+func TestDispatch_PreLaunch_GitHub404_CtxCancel_AbandonsLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{NotFound: true}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// Force a real, non-zero confirm delay so the select hits ctx.Done.
+	s.notFoundConfirmDelay = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	s.dispatch(ctx, 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked after ctx cancel: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status == "completed" {
+		t.Fatalf("job wrongly cancelled on ctx-aborted confirm: %+v", job)
+	}
+}
+
+// API hiccup must NOT block dispatch — refusing on transient failures
+// would create a worse failure mode where real jobs never run. The
+// reconciler + replay catch any wasted launch.
+func TestDispatch_PreLaunch_WorkflowJobError_ProceedsOptimistically(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobErr: errors.New("github 502")}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 1 {
+		t.Fatalf("Launch should still run on transient WorkflowJob error, calls=%d", ln.calls.Load())
+	}
+}
+
+// Status==in_progress is the "another runner won the binding race"
+// branch — same handling as cancelled: abort before InsertRunner.
+func TestDispatch_PreLaunch_GitHubInProgress_AbortsBeforeInsert(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{Status: "in_progress"}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite in_progress: calls=%d", ln.calls.Load())
+	}
+}
+
 // errStore is a minimal store.Store stub used to inject failures the real
 // SQLite store can't easily produce.
 type errStore struct {
@@ -815,6 +1074,12 @@ func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) (boo
 	panic("unused")
 }
 func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
+func (e *errStore) CancelJobIfPending(context.Context, int64) (bool, error) {
+	panic("unused")
+}
+func (e *errStore) CancelPendingJobsForRepo(context.Context, string) (int64, error) {
+	panic("unused")
+}
 func (e *errStore) InsertRunner(context.Context, *store.Runner) error     { panic("unused") }
 func (e *errStore) UpdateRunnerStatus(context.Context, string, string) error {
 	panic("unused")

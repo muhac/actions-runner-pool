@@ -195,14 +195,21 @@ change any of them, delete the App on GitHub, wipe the gharp volume
 - **Webhook 401.** The signing secret in `app_config` doesn't match the
   one GitHub holds. This usually means you swapped the DB but kept the
   old App, or vice versa. Re-run `/setup`.
-- **Runners start but never pick up the job.** Check `RUNNER_LABELS` — a
-  job is accepted only if some label in `runs-on` is in the allowlist.
+- **Runners start but never pick up the job.** Check `RUNNER_LABELS` —
+  a job is accepted only if every label in its `runs-on` set is
+  satisfiable from `RUNNER_LABELS` (or is the implicit `self-hosted`).
 - **`BASE_URL drift` warning at startup.** Your `BASE_URL` env differs
   from the URL stored in `app_config`. Either revert the env or re-run
   `/setup`. See `configuration.md`.
 - **Runners pile up after jobs finish.** Should not happen with the
   default `--rm` command. If you removed `--rm` in a custom
-  `RUNNER_COMMAND`, restore it or add your own GC.
+  `RUNNER_COMMAND`, restore it or add your own GC. The reconciler's
+  `RUNNER_MAX_LIFETIME` sweep (default 2h) is a backstop, not a
+  replacement.
+- **Cap appears stuck (`active runners` count won't drop).** A 60s
+  reconciler tick clears stale rows whose container is gone. Tail
+  logs at `LOG_LEVEL=debug` for the `reconciler: tick complete`
+  heartbeat to confirm it's running.
 
 ### Logs
 

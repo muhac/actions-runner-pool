@@ -143,8 +143,28 @@ func (h *WebhookHandler) handleInstallation(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	case "deleted":
+		// The App was uninstalled. Order matters: drop the
+		// repo→installation mapping FIRST, then cancel pending jobs.
+		// A `workflow_job: queued` webhook racing this handler
+		// otherwise inserts a new pending row between our cancel
+		// query and the mapping removal — landing in a state where
+		// dispatch would still see the old mapping. With the order
+		// reversed, any racing insert lands AFTER the mapping is
+		// gone, so dispatch's "no installation -> cancel" fallback
+		// catches it.
+		for _, repo := range ev.Repositories {
+			if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
+				h.logError("remove repo->installation after installation deleted", err)
+			}
+			n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
+			if err != nil {
+				h.logError("cancel pending jobs after installation deleted", err)
+			} else if n > 0 && h.Log != nil {
+				h.Log.Info("installation deleted: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
+			}
+		}
 		if h.Log != nil {
-			h.Log.Info("installation deleted (not removing rows in v1)", "installation_id", ev.Installation.ID)
+			h.Log.Info("installation deleted", "installation_id", ev.Installation.ID, "repos", len(ev.Repositories))
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -177,8 +197,19 @@ func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r
 		}
 	}
 	for _, repo := range ev.RepositoriesRemoved {
+		// Remove BEFORE cancel so a racing queued webhook lands after
+		// the mapping is gone and falls into dispatch's
+		// "no installation -> cancel" fallback. The reverse order
+		// would let the racing insert slip through cancel and then
+		// require dispatch to clean it up later.
 		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
 			h.logError("remove repo->installation", err)
+		}
+		n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
+		if err != nil {
+			h.logError("cancel pending jobs after repo removed", err)
+		} else if n > 0 && h.Log != nil {
+			h.Log.Info("repo removed from installation: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -193,7 +224,7 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !labelsMatch(ev.WorkflowJob.Labels, h.Cfg.RunnerLabels) {
+	if !labelsMatch(ev.WorkflowJob.Labels, h.Cfg.RunnerLabelSet) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -271,22 +302,49 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// labelsMatch returns true if any of the runs-on labels intersects the
-// configured RunnerLabels. An unset configured set means "serve everything".
-func labelsMatch(runsOn, configured []string) bool {
+// labelsMatch returns true if every job runs-on label can be satisfied
+// by this pool — i.e. job.runs_on ⊆ configured (with the implicit
+// "self-hosted" label always considered satisfied because GitHub
+// assigns it to every self-hosted runner).
+//
+// `configured` is the precomputed (lower-cased + trimmed) set built
+// once at config load — webhook is a hot path and we can't afford to
+// reallocate + restring per request. In normal startup
+// `config.parseLabels` defaults RunnerLabels to ["self-hosted"], so
+// `configured` is never actually empty in production. The empty-set
+// = "serve everything" fallback below is for direct callers / tests.
+//
+// GitHub's runs-on semantics are cumulative: a runner is only eligible
+// for a job if it has ALL of the job's labels (per the
+// "using-self-hosted-runners-in-a-workflow" docs). The previous
+// any-overlap check accepted jobs we couldn't fulfill — e.g. a job
+// requiring [self-hosted, gpu] on a pool that only advertises
+// [self-hosted] would launch a runner GitHub would never bind, leaving
+// a ghost.
+func labelsMatch(runsOn []string, configured map[string]struct{}) bool {
 	if len(configured) == 0 {
 		return true
 	}
-	want := make(map[string]struct{}, len(configured))
-	for _, l := range configured {
-		want[l] = struct{}{}
-	}
 	for _, l := range runsOn {
-		if _, ok := want[l]; ok {
-			return true
+		k := normalizeLabel(l)
+		if k == "self-hosted" {
+			// "self-hosted" is GitHub-assigned to every self-hosted
+			// runner, so it's always satisfiable on this pool even
+			// if the operator didn't list it explicitly.
+			continue
+		}
+		if _, ok := configured[k]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+// normalizeLabel lower-cases and trims a label. GitHub treats labels
+// as case-insensitive (per the labels doc), so we do the same to avoid
+// rejecting Self-Hosted vs self-hosted.
+func normalizeLabel(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func (h *WebhookHandler) logError(msg string, err error) {

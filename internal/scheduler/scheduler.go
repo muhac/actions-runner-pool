@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/runner"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
@@ -23,6 +24,11 @@ type GitHubClient interface {
 	AppJWT(pem []byte, appID int64) (string, error)
 	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
 	RegistrationToken(ctx context.Context, installationToken, repoFullName string) (string, error)
+	// WorkflowJob fetches the live job state from GitHub. Used as the
+	// pre-launch correctness check that catches jobs which
+	// completed/cancelled while we were minting tokens (or whose
+	// state-change webhooks were delayed/dropped).
+	WorkflowJob(ctx context.Context, installationToken, repoFullName string, jobID int64) (*github.WorkflowJobStatus, error)
 }
 
 type Scheduler struct {
@@ -33,22 +39,32 @@ type Scheduler struct {
 	jobCh  chan int64
 	log    *slog.Logger
 
-	capBackoff    time.Duration
-	replayPeriod  time.Duration
-	nameFn        func(jobID int64) (string, string)
+	capBackoff              time.Duration
+	replayPeriod            time.Duration
+	notFoundConfirmDelay    time.Duration
+	noInstallationCancelAge time.Duration
+	nameFn                  func(jobID int64) (string, string)
+	nowFn                   func() time.Time
 }
 
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
-		cfg:          cfg,
-		store:        st,
-		gh:           gh,
-		runner:       rn,
-		jobCh:        make(chan int64, 256),
-		log:          log,
-		capBackoff:   2 * time.Second,
-		replayPeriod: 1 * time.Minute,
-		nameFn:       defaultNameFn,
+		cfg:                     cfg,
+		store:                   st,
+		gh:                      gh,
+		runner:                  rn,
+		jobCh:                   make(chan int64, 256),
+		log:                     log,
+		capBackoff:              2 * time.Second,
+		replayPeriod:            1 * time.Minute,
+		notFoundConfirmDelay:    2 * time.Second,
+		// Out-of-order webhook delivery (queued before
+		// installation_repositories:added) usually resolves within a
+		// few seconds. 1 minute gives plenty of room for the install
+		// event to arrive while still bounding the replay loop.
+		noInstallationCancelAge: 1 * time.Minute,
+		nameFn:                  newNameFn(cfg.RunnerNamePrefix),
+		nowFn:                   time.Now,
 	}
 }
 
@@ -145,7 +161,31 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 	if inst == nil {
-		s.log.Warn("dispatch: no installation for repo; leaving pending", "job_id", jobID, "repo", job.Repo)
+		// No installation for this repo. Two ways to land here:
+		//   (a) Installation removal raced us and won — the cancel
+		//       pass missed this row, dispatch should cancel.
+		//   (b) The workflow_job:queued webhook arrived BEFORE the
+		//       installation_repositories:added webhook for the same
+		//       repo (out-of-order delivery is documented). Cancelling
+		//       here would kill a real job whose install event is
+		//       seconds away.
+		//
+		// Distinguish by row age: a fresh row (just inserted) gets the
+		// benefit of the doubt and stays pending so the next replay
+		// tick can re-dispatch it. An old row (past noInstallationCancelAge)
+		// is treated as case (a) and cancelled to break the replay
+		// loop.
+		age := s.nowFn().Sub(job.ReceivedAt)
+		if age < s.noInstallationCancelAge {
+			s.log.Warn("dispatch: no installation for repo; leaving young pending row for next replay", "job_id", jobID, "repo", job.Repo, "age", age)
+			return
+		}
+		s.log.Info("dispatch: no installation for repo; cancelling stale job", "job_id", jobID, "repo", job.Repo, "age", age)
+		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+			s.log.Error("dispatch: CancelJobIfPending after missing installation failed", "job_id", jobID, "err", err)
+		} else if !cancelled {
+			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
+		}
 		return
 	}
 
@@ -168,6 +208,60 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	regTok, err := s.gh.RegistrationToken(ctx, instTok, job.Repo)
 	if err != nil {
 		s.log.Error("dispatch: RegistrationToken failed", "job_id", jobID, "repo", job.Repo, "err", err)
+		return
+	}
+
+	// Pre-launch truth-of-record check against GitHub. The opening
+	// store.GetJob only saw what webhooks had written; the InstallationToken
+	// + RegistrationToken round-trips above can take seconds, during which
+	// the user may have cancelled the workflow or another runner may have
+	// claimed the job. Without this we'd happily launch a container nobody
+	// is ever going to bind to — straight ghost runner that pins a cap slot
+	// until the reconciler clears it.
+	live, err := s.gh.WorkflowJob(ctx, instTok, job.Repo, jobID)
+	switch {
+	case err != nil:
+		// API hiccup: stay conservative and proceed. The 60s reconciler +
+		// dispatchedReplayAge will catch a wasted launch; refusing on
+		// transient GitHub errors would create a worse failure mode where
+		// real jobs never dispatch.
+		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)
+	case live.NotFound:
+		// Job was deleted/inaccessible. Confirm with a single retry
+		// before acting — a single 404 from a brief GitHub outage or
+		// CDN edge propagation could otherwise wrongly cancel a real
+		// queued job. If the second read still says NotFound, treat as
+		// terminal: mark cancelled so the row stops participating in
+		// replay. conclusion="cancelled" matches the shape of a
+		// webhook-driven cancellation.
+		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
+		confirmed, aborted := confirm404(ctx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
+		if aborted {
+			// ctx cancelled mid-confirm — process is shutting down.
+			// Returning here avoids InsertRunner+Launch with a dying
+			// ctx, which would leave a half-created orphan that the
+			// orphan sweep only catches after the grace window.
+			s.log.Info("dispatch: 404 confirm aborted by ctx cancellation; abandoning launch", "job_id", jobID)
+			return
+		}
+		if !confirmed {
+			s.log.Info("dispatch: 404 not confirmed on retry; proceeding optimistically", "job_id", jobID)
+			break
+		}
+		s.log.Info("dispatch: 404 confirmed; marking cancelled", "job_id", jobID, "repo", job.Repo)
+		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+			s.log.Error("dispatch: CancelJobIfPending after 404 failed", "job_id", jobID, "err", err)
+		} else if !cancelled {
+			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
+		}
+		return
+	case live.Status != "queued":
+		// Most common case: the job is already in_progress (another runner
+		// won) or completed (cancelled / finished). Either way the launch
+		// is wasted work — abort before InsertRunner so we don't even
+		// create a row to clean up.
+		s.log.Info("dispatch: GitHub reports job no longer queued; aborting launch",
+			"job_id", jobID, "github_status", live.Status, "github_conclusion", live.Conclusion)
 		return
 	}
 
@@ -218,12 +312,64 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
 }
 
-func defaultNameFn(jobID int64) (string, string) {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		name := fmt.Sprintf("gharp-%d-%d", jobID, time.Now().UnixNano())
+// newNameFn returns a name generator that yields prefix+jobID+hex.
+// Used by both production wiring (cfg.RunnerNamePrefix) and tests
+// that want a stable namespace.
+func newNameFn(prefix string) func(jobID int64) (string, string) {
+	return func(jobID int64) (string, string) {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			name := fmt.Sprintf("%s%d-%d", prefix, jobID, time.Now().UnixNano())
+			return name, name
+		}
+		name := fmt.Sprintf("%s%d-%s", prefix, jobID, hex.EncodeToString(b[:]))
 		return name, name
 	}
-	name := fmt.Sprintf("gharp-%d-%s", jobID, hex.EncodeToString(b[:]))
-	return name, name
+}
+
+// confirm404 re-reads the workflow job after a short delay. Returns:
+//   - confirmed=true if the second read also surfaces NotFound or
+//     AuthFailed (cancel the job).
+//   - confirmed=false, aborted=false: any other outcome — back to
+//     queued or transport error — fall through to the optimistic
+//     launch path.
+//   - confirmed=false, aborted=true: the context was cancelled (the
+//     parent process is shutting down). The caller must NOT proceed
+//     to InsertRunner/Launch, otherwise we'd kick off a docker run
+//     against a dying ctx and leave a half-created orphan that the
+//     orphan sweep only catches after the grace window.
+func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) (confirmed, aborted bool) {
+	if delay > 0 {
+		// NewTimer + Stop, not time.After: under load the latter
+		// leaves the timer dangling for `delay` whenever ctx wins the
+		// select, which adds avoidable timer churn.
+		t := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !t.Stop() {
+				// Drain the channel if the timer already fired so a
+				// late receiver doesn't see a stale tick.
+				select {
+				case <-t.C:
+				default:
+				}
+			}
+			return false, true
+		case <-t.C:
+		}
+	}
+	if ctx.Err() != nil {
+		return false, true
+	}
+	live, err := gh.WorkflowJob(ctx, instTok, repo, jobID)
+	if err != nil {
+		// Check ctx specifically — Go's HTTP client wraps ctx
+		// cancellation in the returned error and we want to
+		// distinguish that from a real transport flake.
+		if ctx.Err() != nil {
+			return false, true
+		}
+		return false, false
+	}
+	return live.NotFound || live.AuthFailed, false
 }

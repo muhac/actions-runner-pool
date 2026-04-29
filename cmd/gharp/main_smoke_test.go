@@ -46,6 +46,11 @@ func TestSmoke_BinaryStartsAndOpensDB(t *testing.T) {
 		"BASE_URL=http://127.0.0.1:"+port,
 		"STORE_DSN=file:"+dbPath,
 		"LOG_LEVEL=warn",
+		// Confine the reconciler's orphan sweep to a per-test
+		// namespace so it can't reach into the host's other gharp
+		// containers (notably the self-hosted runner this test
+		// runs in).
+		"RUNNER_NAME_PREFIX=gharp-smoke-"+t.Name()+"-",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
