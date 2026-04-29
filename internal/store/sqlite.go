@@ -257,11 +257,18 @@ func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID in
 	return n > 0, nil
 }
 
-func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) error {
+func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) (bool, error) {
 	const q = `UPDATE jobs SET status='completed', conclusion=?,
 		updated_at=CURRENT_TIMESTAMP WHERE id=?`
-	_, err := s.db.ExecContext(ctx, q, conclusion, jobID)
-	return err
+	res, err := s.db.ExecContext(ctx, q, conclusion, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // CancelJobIfPending status-guards the cancel: only rows still in

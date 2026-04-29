@@ -152,8 +152,12 @@ func TestMarkJobInProgressThenCompleted(t *testing.T) {
 	if got.Status != "in_progress" || got.RunnerID != 99 || got.RunnerName != "runner-7" {
 		t.Fatalf("after in_progress: %+v", got)
 	}
-	if err := s.MarkJobCompleted(ctx, 7, "success"); err != nil {
+	completed, err := s.MarkJobCompleted(ctx, 7, "success")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !completed {
+		t.Fatal("MarkJobCompleted completed=false, want true")
 	}
 	got, _ = s.GetJob(ctx, 7)
 	if got.Status != "completed" || got.Conclusion != "success" {
@@ -224,8 +228,12 @@ func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
 	if _, err := s.MarkJobInProgress(ctx, 10, 1, "r"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkJobCompleted(ctx, 10, "success"); err != nil {
+	completed, err := s.MarkJobCompleted(ctx, 10, "success")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !completed {
+		t.Fatal("MarkJobCompleted completed=false, want true")
 	}
 	if _, err := s.MarkJobInProgress(ctx, 10, 999, "ghost"); err != nil {
 		t.Fatal(err)
@@ -233,6 +241,17 @@ func TestMarkJobDispatched_OnlyAdvancesPending(t *testing.T) {
 	got, _ = s.GetJob(ctx, 10)
 	if got.Status != "completed" || got.RunnerName != "r" {
 		t.Fatalf("completed row was resurrected: %+v", got)
+	}
+}
+
+func TestMarkJobCompleted_MissingJobNoOp(t *testing.T) {
+	s := newStore(t)
+	completed, err := s.MarkJobCompleted(context.Background(), 404, "success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed {
+		t.Fatal("MarkJobCompleted completed=true for missing job, want false")
 	}
 }
 

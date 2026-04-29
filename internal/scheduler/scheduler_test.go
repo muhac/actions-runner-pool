@@ -51,22 +51,22 @@ func newCfg(maxConcurrent int) *config.Config {
 // --- spy GitHub client -------------------------------------------------------
 
 type spyGH struct {
-	jwtCalls    atomic.Int64
-	instCalls   atomic.Int64
-	regCalls    atomic.Int64
-	wfJobCalls  atomic.Int64
-	jwtErr      error
-	instErr     error
-	regErr      error
-	wfJobErr    error
-	wfJobReply  *github.WorkflowJobStatus
+	jwtCalls   atomic.Int64
+	instCalls  atomic.Int64
+	regCalls   atomic.Int64
+	wfJobCalls atomic.Int64
+	jwtErr     error
+	instErr    error
+	regErr     error
+	wfJobErr   error
+	wfJobReply *github.WorkflowJobStatus
 	// wfJobReplies, when non-empty, is consumed in order: the Nth
 	// WorkflowJob call returns the Nth reply. Lets tests exercise the
 	// "second read disagrees with first" 404-confirm path. Empty falls
 	// back to wfJobReply (or the queued default).
 	wfJobReplies []*github.WorkflowJobStatus
-	mu          sync.Mutex
-	callOrder   []string
+	mu           sync.Mutex
+	callOrder    []string
 }
 
 func (g *spyGH) recordCall(name string) {
@@ -1058,12 +1058,12 @@ func (e *errStore) PendingJobs(ctx context.Context) ([]*store.Job, error) {
 
 // All other Store methods are unused by the tests that touch errStore;
 // they panic if exercised so an accidental call surfaces loudly.
-func (e *errStore) SaveAppConfig(context.Context, *store.AppConfig) error { panic("unused") }
-func (e *errStore) GetAppConfig(context.Context) (*store.AppConfig, error) { panic("unused") }
-func (e *errStore) UpsertInstallation(context.Context, *store.Installation) error { panic("unused") }
+func (e *errStore) SaveAppConfig(context.Context, *store.AppConfig) error            { panic("unused") }
+func (e *errStore) GetAppConfig(context.Context) (*store.AppConfig, error)           { panic("unused") }
+func (e *errStore) UpsertInstallation(context.Context, *store.Installation) error    { panic("unused") }
 func (e *errStore) ListInstallations(context.Context) ([]*store.Installation, error) { panic("unused") }
-func (e *errStore) UpsertRepoInstallation(context.Context, string, int64) error { panic("unused") }
-func (e *errStore) RemoveRepoInstallation(context.Context, string) error { panic("unused") }
+func (e *errStore) UpsertRepoInstallation(context.Context, string, int64) error      { panic("unused") }
+func (e *errStore) RemoveRepoInstallation(context.Context, string) error             { panic("unused") }
 func (e *errStore) InstallationForRepo(context.Context, string) (*store.Installation, error) {
 	panic("unused")
 }
@@ -1072,24 +1072,24 @@ func (e *errStore) ListAllInstallationRepos(context.Context) ([]store.RepoInstal
 }
 func (e *errStore) InsertJobIfNew(context.Context, *store.Job) (bool, error) { panic("unused") }
 func (e *errStore) GetJob(context.Context, int64) (*store.Job, error)        { panic("unused") }
-func (e *errStore) MarkJobDispatched(context.Context, int64) error            { panic("unused") }
+func (e *errStore) MarkJobDispatched(context.Context, int64) error           { panic("unused") }
 func (e *errStore) MarkJobInProgress(context.Context, int64, int64, string) (bool, error) {
 	panic("unused")
 }
-func (e *errStore) MarkJobCompleted(context.Context, int64, string) error { panic("unused") }
+func (e *errStore) MarkJobCompleted(context.Context, int64, string) (bool, error) { panic("unused") }
 func (e *errStore) CancelJobIfPending(context.Context, int64) (bool, error) {
 	panic("unused")
 }
 func (e *errStore) CancelPendingJobsForRepo(context.Context, string) (int64, error) {
 	panic("unused")
 }
-func (e *errStore) InsertRunner(context.Context, *store.Runner) error     { panic("unused") }
+func (e *errStore) InsertRunner(context.Context, *store.Runner) error { panic("unused") }
 func (e *errStore) UpdateRunnerStatus(context.Context, string, string) error {
 	panic("unused")
 }
 func (e *errStore) UpdateRunnerStatusByName(context.Context, string, string) error {
 	panic("unused")
 }
-func (e *errStore) ActiveRunnerCount(context.Context) (int, error)      { panic("unused") }
+func (e *errStore) ActiveRunnerCount(context.Context) (int, error)             { panic("unused") }
 func (e *errStore) ListActiveRunners(context.Context) ([]*store.Runner, error) { panic("unused") }
-func (e *errStore) Close() error                                        { return nil }
+func (e *errStore) Close() error                                               { return nil }

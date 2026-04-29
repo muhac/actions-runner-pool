@@ -299,10 +299,11 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusOK)
 
 	case "completed":
-		if err := h.Store.MarkJobCompleted(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.Conclusion); err != nil {
+		completed, err := h.Store.MarkJobCompleted(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.Conclusion)
+		if err != nil {
 			h.logError("mark job completed", err)
 		}
-		if ev.WorkflowJob.RunnerName != "" {
+		if completed && ev.WorkflowJob.RunnerName != "" {
 			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "finished"); err != nil {
 				h.logError("update runner status finished", err)
 			}

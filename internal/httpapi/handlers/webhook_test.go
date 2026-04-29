@@ -536,6 +536,28 @@ func TestWebhook_PublicRepo_CompletedStillUpdatesLifecycle(t *testing.T) {
 	}
 }
 
+func TestWebhook_PublicRepo_CompletedMissingJobDoesNotTouchRunner(t *testing.T) {
+	body := []byte(`{
+		"action": "completed",
+		"workflow_job": {"id": 12345, "conclusion": "success", "runner_name": "runner-A", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	st.markJobCompletedNoOp = true
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedCompleted) != 1 {
+		t.Errorf("MarkJobCompleted should be called once: %+v", st.markedCompleted)
+	}
+	if len(st.updatedRunnerByName) != 0 {
+		t.Errorf("runner status must NOT be touched for missing job: %+v", st.updatedRunnerByName)
+	}
+}
+
 func TestWebhook_BadJSON_400(t *testing.T) {
 	body := []byte(`{not json`)
 	h := newWebhookHandler(t, storeWithSecret(testWebhookSecret), &spyEnqueuer{}, nil)
