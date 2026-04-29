@@ -524,6 +524,35 @@ Concrete v1.x work, ordered by impact on correctness:
 7. **Ops endpoints / dashboard.** `/healthz` exists; add `/metrics`,
    `/jobs?status=...`, an admin force-rerun, and eventually a small
    dashboard beyond the one-shot `/setup` page.
+8. **Public-repo guard.** The `workflow_job` payload's
+   `repository.private` already exposes the bit; we just don't read
+   it. Default behavior should be: drop events from public repos with
+   a warning, since self-hosted runners on public repos = remote code
+   execution by any contributor (see README §3 warning). Opt-out via
+   `ALLOW_PUBLIC_REPOS=true` for users who explicitly trust the repo.
+9. **Per-repo allowlist.** A `REPO_ALLOWLIST` env (comma-separated
+   `owner/name`) so operators can scope a single installation to a
+   subset of the repos GitHub granted. Today the only knob is
+   "uninstall on the unwanted repo from the GitHub UI", which is a
+   round-trip for every change.
+10. **Hardened runner runtime.** The default runner shares the host
+    Docker socket and pollutes host state — e.g., `docker buildx`
+    leaves `buildx_buildkit_builder-*` containers behind because they
+    are created on the host, not inside the runner container. Swapping
+    the OCI runtime in the user-supplied `RUNNER_COMMAND` template
+    fixes both pollution and security exposure without any gharp code
+    change. Three established options:
+    - **sysbox-runc** — VM-like containers with nested Docker baked
+      in; best fit for the "buildx pollutes host" scenario.
+    - **kata-runtime** — per-container microVM via QEMU/Firecracker;
+      strongest isolation, biggest perf cost.
+    - **gVisor (runsc)** — user-space kernel intercepting syscalls;
+      middle ground on isolation and performance.
+    Document recipes in `docs/deploy.md`. Architecture-wise the
+    `internal/runner` boundary is already small enough that a
+    pluggable backend (Firecracker/Podman direct, not via OCI runtime
+    swap) is also a single-package change — but the OCI-runtime route
+    keeps gharp code untouched.
 
 ## Future split points
 
