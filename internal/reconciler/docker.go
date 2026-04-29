@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -33,7 +34,8 @@ func (ExecDocker) Inspect(ctx context.Context, containerName string) (bool, erro
 		// the stderr signature — anything else is propagated so
 		// sweepGhostRunners stays conservative.
 		out := stderr.String()
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 &&
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 &&
 			(strings.Contains(out, "No such object") || strings.Contains(out, "No such container")) {
 			return false, nil
 		}

@@ -185,13 +185,14 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	// is ever going to bind to — straight ghost runner that pins a cap slot
 	// until the reconciler clears it.
 	live, err := s.gh.WorkflowJob(ctx, instTok, job.Repo, jobID)
-	if err != nil {
+	switch {
+	case err != nil:
 		// API hiccup: stay conservative and proceed. The 60s reconciler +
 		// dispatchedReplayAge will catch a wasted launch; refusing on
 		// transient GitHub errors would create a worse failure mode where
 		// real jobs never dispatch.
 		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)
-	} else if live.NotFound {
+	case live.NotFound:
 		// Job was deleted/inaccessible. Mark cancelled so the row stops
 		// participating in replay; conclusion="cancelled" matches the
 		// shape of a webhook-driven cancellation.
@@ -200,7 +201,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			s.log.Error("dispatch: MarkJobCompleted(cancelled) after 404 failed", "job_id", jobID, "err", err)
 		}
 		return
-	} else if live.Status != "queued" {
+	case live.Status != "queued":
 		// Most common case: the job is already in_progress (another runner
 		// won) or completed (cancelled / finished). Either way the launch
 		// is wasted work — abort before InsertRunner so we don't even
