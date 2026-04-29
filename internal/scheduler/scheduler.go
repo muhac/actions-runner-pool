@@ -289,11 +289,14 @@ func defaultNameFn(jobID int64) (string, string) {
 }
 
 // confirm404 re-reads the workflow job after a short delay. Returns
-// true only if the second read also surfaces NotFound — protecting
-// against a single transient 404 (CDN edge propagation, brief GitHub
-// outage) wrongly cancelling a real queued job. Any other outcome
-// (back to queued, or a transport error) returns false so the caller
-// can fall through to the optimistic path.
+// true if the second read also surfaces NotFound OR AuthFailed —
+// protecting against a single transient 404 (CDN edge propagation,
+// brief GitHub outage) wrongly cancelling a real queued job, but
+// also catching the most common cause of a real 404: the App being
+// uninstalled mid-dispatch, after which the same install token will
+// produce 401/403 and we should still treat the job as terminal
+// rather than launching a runner for it. Any other outcome (back to
+// queued, or a transport error, or ctx cancellation) returns false.
 func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) bool {
 	if delay > 0 {
 		select {
@@ -306,5 +309,5 @@ func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobI
 	if err != nil {
 		return false
 	}
-	return live.NotFound
+	return live.NotFound || live.AuthFailed
 }

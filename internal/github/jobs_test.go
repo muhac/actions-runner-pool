@@ -79,6 +79,39 @@ func TestWorkflowJob_AuthHeaderForwarded(t *testing.T) {
 	}
 }
 
+// 401 (e.g. installation token revoked because App was uninstalled
+// mid-dispatch) is surfaced as AuthFailed rather than an error so the
+// scheduler's confirm404 path can treat it equivalently to NotFound.
+func TestWorkflowJob_401_ReturnsAuthFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+	got, err := c.WorkflowJob(context.Background(), "tok", "a/b", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.AuthFailed || got.NotFound {
+		t.Fatalf("expected AuthFailed=true, NotFound=false, got %+v", got)
+	}
+}
+
+func TestWorkflowJob_403_ReturnsAuthFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv.URL)
+	got, err := c.WorkflowJob(context.Background(), "tok", "a/b", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.AuthFailed {
+		t.Fatalf("expected AuthFailed=true, got %+v", got)
+	}
+}
+
 func TestWorkflowJob_500IsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

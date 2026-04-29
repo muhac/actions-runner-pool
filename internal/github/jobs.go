@@ -24,6 +24,13 @@ type WorkflowJobStatus struct {
 	// inaccessible). When true, Status and Conclusion are empty —
 	// callers should treat this as terminal.
 	NotFound bool
+	// AuthFailed is true when GitHub returned 401/403. Distinct from
+	// NotFound because the most common cause is "the App was just
+	// uninstalled and the installation token is no longer valid" —
+	// callers handling 404 confirmation should treat this as a
+	// confirmation that the job is no longer reachable, not as a
+	// transient error to retry past.
+	AuthFailed bool
 }
 
 // WorkflowJob fetches the current status of a workflow job from
@@ -55,6 +62,9 @@ func (c *Client) WorkflowJob(ctx context.Context, installationToken, repoFullNam
 
 	if resp.StatusCode == http.StatusNotFound {
 		return &WorkflowJobStatus{NotFound: true}, nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return &WorkflowJobStatus{AuthFailed: true}, nil
 	}
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("workflow job: status %d", resp.StatusCode)

@@ -918,6 +918,34 @@ func TestDispatch_PreLaunch_GitHub404_NotConfirmed_ProceedsToLaunch(t *testing.T
 	}
 }
 
+// AuthFailed on the confirm read = the App was uninstalled mid-
+// dispatch (the install token still authenticates fine on the first
+// call but stops working seconds later). Treat as confirmed: cancel
+// the job rather than launching a runner whose install token won't
+// register.
+func TestDispatch_PreLaunch_GitHub404_AuthFailedOnConfirm_Cancels(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReplies: []*github.WorkflowJobStatus{
+		{NotFound: true},
+		{AuthFailed: true},
+	}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite confirmed-via-auth-failure 404: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job after auth-confirmed 404 = %+v, want completed/cancelled", job)
+	}
+}
+
 // API hiccup must NOT block dispatch — refusing on transient failures
 // would create a worse failure mode where real jobs never run. The
 // reconciler + replay catch any wasted launch.
