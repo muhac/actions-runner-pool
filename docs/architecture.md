@@ -243,21 +243,34 @@ Sources of ghost runners:
 3. Process crash between `INSERT INTO runners` and `docker run` — runner row exists, container does not.
 4. Container running but `gharp` lost track (e.g. someone manually removed it).
 
-A reconciliation loop (background goroutine, ~60s interval) is **mandatory by v1.1**, sketched as:
+A reconciliation loop (background goroutine, 60s interval) ships in `internal/reconciler` and runs alongside the scheduler. The first cut is **deliberately narrower than the original sketch** — it covers the two sources that produce the cap-deadlock symptom (sources 3 and 4 above) and defers GitHub-side cleanup and idle-timeout reaping. Pseudocode:
 
 ```text
-for each runner in runners table where status in ('starting','idle','busy'):
-    container_state = docker inspect <container_name>
-    runner_state    = github API: GET /repos/{repo}/actions/runners
-    case (container_state, runner_state):
-      (gone, gone)              -> mark runner 'finished', no action
-      (gone, registered)        -> github API: DELETE runner; mark 'finished'
-      (running, gone)           -> docker rm -f; mark 'finished'  (orphaned container)
-      (running, registered+idle, age > IDLE_TIMEOUT)  -> docker rm -f + DELETE runner
-      (running, registered+busy) -> leave alone
+every 60s:
+    # ghost runner sweep (sources 2, 3, 4 above)
+    for each row in runners where status in ('starting','idle','busy'):
+        if docker inspect <container_name> says "no such container":
+            UPDATE runners SET status='finished'   # frees the cap slot
+        elif docker inspect errored:
+            leave alone                             # conservative: don't kill live runners on a flaky daemon
+        else:
+            keep
+
+    # orphan container sweep (source 4, the inverse direction)
+    for name in `docker ps -a --filter name=gharp-`:
+        if name not in active runners table:
+            if any active row is younger than 30s grace:
+                defer                               # protect InsertRunner -> daemon-ack race
+            else:
+                docker rm -f <name>
 ```
 
-For v1 we accept that ghost runners may accumulate and rely on the user to occasionally clean them up. The reconciliation loop ships in v1.1 — but the data model (specifically: storing `container_name` and `runner_name` from the start, even if we never query them yet) must be in place from v1, otherwise we can't reconcile retroactively.
+The dispatched job tied to a cleared runner is left for the scheduler's existing `dispatchedReplayAge` (5 min) replay to rescue — no direct coupling between the reconciler and the jobs table.
+
+**Out of scope for this pass** (deferred to later v1.x):
+- GitHub-side ghost runner deregistration (`DELETE /repos/{owner}/{repo}/actions/runners/{id}`). Requires installation-token plumbing into the loop and is mostly a polish item — these registrations expire on their own once the runner is unreachable.
+- Idle-timeout reaping (`(running, registered+idle, age > IDLE_TIMEOUT) -> docker rm -f`). Needs a real GitHub API read per tick and an `IDLE_TIMEOUT` config var. The cap-deadlock case doesn't require it.
+- Live cap re-check inside `dispatch` (re-`docker inspect` every active runner before launch). Functionally redundant with the 60s loop and would double the docker call rate.
 
 #### Concurrency cap policy (v1)
 
@@ -497,12 +510,17 @@ later if env vars get unwieldy. Not before.
 
 Concrete v1.x work, ordered by impact on correctness:
 
-1. **Reconciliation loop.** Periodic goroutine (~60s) that joins
+1. **Reconciliation loop.** ~~Periodic goroutine (~60s) that joins
    `runners` × `docker inspect` × GitHub `/runners`. Cleans up ghost
    runners (started, never claimed a job), force-removes stale
    GitHub-side registrations, and lets us shrink the dispatched-replay
    window from 5 min to "as soon as we notice the runner is idle." See
-   sketch in §"Ghost runners and reconciliation".
+   sketch in §"Ghost runners and reconciliation".~~ **Shipped (narrowed
+   scope):** `internal/reconciler` covers ghost runners (DB row alive
+   but container gone — the cap-deadlock fix) and orphan containers
+   (container alive but no DB row). GitHub-side deregistration and
+   idle-timeout reaping remain deferred — see §"Ghost runners and
+   reconciliation" for what's in vs. out.
 2. **Graceful drain on SIGTERM.** Current behavior cancels the parent
    context immediately, killing in-flight `docker run` invocations and
    tearing down ephemeral containers mid-job. Drain should let
