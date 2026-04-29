@@ -14,10 +14,13 @@
 //
 //  2. Orphan container: a container whose name matches our prefix is
 //     running, but no active runner row claims it. Force-remove it.
-//     A grace window protects containers that were just started and
-//     haven't been recorded yet (the InsertRunner happens BEFORE
-//     `docker run`, so this race is small but possible if start fails
-//     between the insert and the docker daemon ack).
+//     A grace window protects very new containers from being swept
+//     during transient docker-vs-DB visibility skew across separate
+//     SQLite connections (InsertRunner commits on the writer
+//     connection BEFORE `docker run` is invoked, but a different
+//     reader connection in the pool may not see that row yet for a
+//     few hundred ms). Also covers the rare case where a `gharp-`
+//     named container appears via a non-standard launch path.
 //
 // Out of scope for this pass: GitHub-side ghost runner deregistration,
 // idle-timeout reaping, dispatch-time live cap checks. See
@@ -97,11 +100,12 @@ func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration) *Reco
 		docker:      dk,
 		log:         log,
 		period:      60 * time.Second,
-		// Orphan grace: a container can briefly exist before its runner
-		// row is committed (InsertRunner is BEFORE docker run, but the
-		// docker daemon may surface the container in `ps` slightly
-		// before the InsertRunner txn becomes visible to a separate
-		// reader connection). 30s comfortably covers that.
+		// Orphan grace: protect very new containers from sweep during
+		// short-lived docker-vs-DB visibility skew. InsertRunner
+		// commits on the writer connection BEFORE the launcher's
+		// `docker run` is invoked, but a different reader connection
+		// in the database/sql pool may briefly not see that row. 30s
+		// is well over typical skew.
 		grace:       30 * time.Second,
 		maxLifetime: maxLifetime,
 		nowFn:       time.Now,
@@ -237,10 +241,11 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 		if _, ok := known[c.Name]; ok {
 			continue
 		}
-		// Per-container grace: protect the brief window between
-		// `docker run` ack and the InsertRunner row becoming visible.
-		// Zero CreatedAt (parse failure) is treated as old — better to
-		// remove an undatable orphan than to leak it forever.
+		// Per-container grace: protect very new containers from sweep
+		// during short-lived docker-vs-DB visibility skew across
+		// SQLite connections. Zero CreatedAt (parse failure) is
+		// treated as old — better to remove an undatable orphan than
+		// to leak it forever.
 		if !c.CreatedAt.IsZero() && now.Sub(c.CreatedAt) < r.grace {
 			r.log.Debug("reconciler: deferring orphan removal during grace window", "container", c.Name, "age", now.Sub(c.CreatedAt))
 			continue

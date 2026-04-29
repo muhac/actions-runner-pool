@@ -268,7 +268,7 @@ every 60s:
     for (name, createdAt) in `docker ps -a --filter name=gharp- --format {{.Names}}|{{.CreatedAt}}`:
         if name not in active runners table:
             if createdAt is recent (< 30s grace):
-                defer                               # per-container, protects the docker-run -> InsertRunner-visible race
+                defer                               # per-container, protects very new containers from short-lived docker-vs-DB visibility skew across sqlite connections
             else:
                 docker rm -f <name>
 ```
