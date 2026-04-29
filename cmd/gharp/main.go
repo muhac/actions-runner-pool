@@ -13,6 +13,7 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/config"
 	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/httpapi"
+	"github.com/muhac/actions-runner-pool/internal/reconciler"
 	"github.com/muhac/actions-runner-pool/internal/runner"
 	"github.com/muhac/actions-runner-pool/internal/scheduler"
 	"github.com/muhac/actions-runner-pool/internal/store"
@@ -60,6 +61,13 @@ func run() error {
 	go func() {
 		if err := sch.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("scheduler stopped", "err", err)
+		}
+	}()
+
+	rec := reconciler.New(st, reconciler.NewExecDocker(), log)
+	go func() {
+		if err := rec.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("reconciler stopped", "err", err)
 		}
 	}()
 
