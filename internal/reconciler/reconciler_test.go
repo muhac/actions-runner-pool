@@ -21,6 +21,8 @@ func quietLog() *slog.Logger {
 type fakeStore struct {
 	mu            sync.Mutex
 	rows          []*store.Runner
+	activeByCall  [][]*store.Runner
+	activeCalls   int
 	updates       []update
 	listErr       error
 	updErr        error
@@ -35,8 +37,18 @@ type update struct {
 func (f *fakeStore) ListActiveRunners(ctx context.Context) ([]*store.Runner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.activeCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
+	}
+	if len(f.activeByCall) > 0 {
+		idx := f.activeCalls - 1
+		if idx >= len(f.activeByCall) {
+			idx = len(f.activeByCall) - 1
+		}
+		out := make([]*store.Runner, len(f.activeByCall[idx]))
+		copy(out, f.activeByCall[idx])
+		return out, nil
 	}
 	out := make([]*store.Runner, len(f.rows))
 	copy(out, f.rows)
@@ -106,13 +118,13 @@ func (f *fakeStore) ListAllInstallationRepos(ctx context.Context) ([]store.RepoI
 }
 
 type fakeDocker struct {
-	mu          sync.Mutex
-	exists      map[string]bool
-	prefixList  []ContainerInfo
-	removed     []string
-	inspectErr  error
-	listErr     error
-	removeErr   error
+	mu         sync.Mutex
+	exists     map[string]bool
+	prefixList []ContainerInfo
+	removed    []string
+	inspectErr error
+	listErr    error
+	removeErr  error
 }
 
 func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
@@ -343,17 +355,17 @@ func TestRun_ContextCancel(t *testing.T) {
 // --- GitHub-side ghost sweep --------------------------------------
 
 type fakeGH struct {
-	mu              sync.Mutex
-	runnersByRepo   map[string][]github.RepoRunner
-	deleted         []deletedRunner
-	listErr         error
-	deleteErr       error
-	jwtErr          error
-	instTokenErr    error
-	jwtCalls        int
-	instTokenCalls  int
-	listCalls       int
-	deleteCalls     int
+	mu             sync.Mutex
+	runnersByRepo  map[string][]github.RepoRunner
+	deleted        []deletedRunner
+	listErr        error
+	deleteErr      error
+	jwtErr         error
+	instTokenErr   error
+	jwtCalls       int
+	instTokenCalls int
+	listCalls      int
+	deleteCalls    int
 }
 
 type deletedRunner struct {
@@ -471,6 +483,33 @@ func TestReconcile_GitHubGhostSweep_IdleRepoWithGhost_Cleared(t *testing.T) {
 	r.sweepGitHubGhostRunners(context.Background())
 	if len(gh.deleted) != 1 || gh.deleted[0] != (deletedRunner{"alice/repo", 42}) {
 		t.Fatalf("expected DELETE of gharp-stale-deadbeef from alice/repo, got %+v", gh.deleted)
+	}
+}
+
+func TestReconcile_GitHubGhostSweep_RechecksActiveRunnerBeforeDelete(t *testing.T) {
+	st := &fakeStore{
+		activeByCall: [][]*store.Runner{
+			nil,
+			{
+				{ContainerName: "gharp-new-runner", RunnerName: "gharp-new-runner", Repo: "alice/repo", Status: "starting", StartedAt: time.Unix(1_700_000_000, 0)},
+			},
+		},
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/repo": {
+			{ID: 42, Name: "gharp-new-runner", Status: "online", Busy: false},
+		},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background())
+	if len(gh.deleted) != 0 {
+		t.Fatalf("new active runner deleted after recheck: %+v", gh.deleted)
+	}
+	if st.activeCalls < 2 {
+		t.Fatalf("expected active runner recheck before delete, got %d calls", st.activeCalls)
 	}
 }
 

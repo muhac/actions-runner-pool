@@ -426,6 +426,15 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 				r.log.Debug("reconciler/github: skipping busy ghost runner", "repo", ri.Repo, "runner", gr.Name)
 				continue
 			}
+			stillActive, err := r.activeRunnerExists(ctx, ri.Repo, gr.Name)
+			if err != nil {
+				r.log.Error("reconciler/github: ListActiveRunners recheck failed; skipping delete", "repo", ri.Repo, "runner_name", gr.Name, "err", err)
+				continue
+			}
+			if stillActive {
+				r.log.Debug("reconciler/github: skipping runner found during active recheck", "repo", ri.Repo, "runner", gr.Name)
+				continue
+			}
 			if err := r.gh.DeleteRepoRunner(ctx, tok, ri.Repo, gr.ID); err != nil {
 				r.log.Error("reconciler/github: DeleteRepoRunner failed", "repo", ri.Repo, "runner_id", gr.ID, "runner_name", gr.Name, "err", err)
 				continue
@@ -436,4 +445,17 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 	}
 	r.log.Debug("reconciler/github: sweep complete",
 		"repos", len(known), "deleted", totalDeleted)
+}
+
+func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName string) (bool, error) {
+	rows, err := r.store.ListActiveRunners(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if row.Repo == repo && row.RunnerName == runnerName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
