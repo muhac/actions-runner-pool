@@ -56,22 +56,29 @@ func TestExecDocker_Inspect_DaemonDown(t *testing.T) {
 	}
 }
 
-// ListByPrefix: parses names line-by-line and re-checks the prefix
-// (docker's --filter name= is substring, not prefix).
-func TestExecDocker_ListByPrefix_FiltersAndTrims(t *testing.T) {
-	withFakeDocker(t, `printf 'gharp-1-aaaa\ngharp-2-bbbb\npre-gharp-3-cccc\n\n'`)
+// ListByPrefix: parses `name|createdAt` line-by-line, re-checks the
+// prefix (docker's --filter name= is substring, not prefix), and
+// surfaces a parsed CreatedAt so the orphan sweep can do per-container
+// grace gating. Unparsable timestamps yield zero CreatedAt — the
+// reconciler's policy treats that as old enough to remove.
+func TestExecDocker_ListByPrefix_FiltersAndParsesCreatedAt(t *testing.T) {
+	withFakeDocker(t, `printf 'gharp-1-aaaa|2026-04-23 10:35:53 -0400 EDT\ngharp-2-bbbb|2026-04-23 11:00:00 +0000 UTC\npre-gharp-3-cccc|2026-04-23 10:35:53 -0400 EDT\ngharp-4-dddd|garbage-time\n\n'`)
 	got, err := NewExecDocker().ListByPrefix(context.Background(), "gharp-")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	want := []string{"gharp-1-aaaa", "gharp-2-bbbb"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
+	if len(got) != 3 {
+		t.Fatalf("got %d entries, want 3 (full=%+v)", len(got), got)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got %v, want %v", got, want)
-		}
+	if got[0].Name != "gharp-1-aaaa" || got[0].CreatedAt.IsZero() {
+		t.Fatalf("entry 0 = %+v", got[0])
+	}
+	if got[1].Name != "gharp-2-bbbb" || got[1].CreatedAt.IsZero() {
+		t.Fatalf("entry 1 = %+v", got[1])
+	}
+	// Unparsable timestamp → zero CreatedAt, but name still surfaced.
+	if got[2].Name != "gharp-4-dddd" || !got[2].CreatedAt.IsZero() {
+		t.Fatalf("entry 2 = %+v (want zero CreatedAt for garbage timestamp)", got[2])
 	}
 }
 

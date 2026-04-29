@@ -63,7 +63,7 @@ func (f *fakeStore) UpdateRunnerStatus(ctx context.Context, container, status st
 type fakeDocker struct {
 	mu          sync.Mutex
 	exists      map[string]bool
-	prefixList  []string
+	prefixList  []ContainerInfo
 	removed     []string
 	inspectErr  error
 	listErr     error
@@ -79,13 +79,13 @@ func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
 	return f.exists[name], nil
 }
 
-func (f *fakeDocker) ListByPrefix(ctx context.Context, prefix string) ([]string, error) {
+func (f *fakeDocker) ListByPrefix(ctx context.Context, prefix string) ([]ContainerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	out := make([]string, len(f.prefixList))
+	out := make([]ContainerInfo, len(f.prefixList))
 	copy(out, f.prefixList)
 	return out, nil
 }
@@ -149,12 +149,13 @@ func TestReconcile_InspectError_DoesNotMarkFinished(t *testing.T) {
 	}
 }
 
-// (3) Container running, no row → orphan, force removed.
+// (3) Container running, no row → orphan, force removed (when old enough).
 func TestReconcile_OrphanContainer_ForceRemoved(t *testing.T) {
 	st := &fakeStore{} // no active runners
 	dk := &fakeDocker{
-		exists:     map[string]bool{},
-		prefixList: []string{"gharp-99-zzzz"},
+		exists: map[string]bool{},
+		// CreatedAt 10 minutes before now → past the 5m grace.
+		prefixList: []ContainerInfo{{Name: "gharp-99-zzzz", CreatedAt: time.Unix(1_700_000_000-600, 0)}},
 	}
 	r := newRecon(st, dk)
 	r.Reconcile(context.Background())
@@ -163,39 +164,58 @@ func TestReconcile_OrphanContainer_ForceRemoved(t *testing.T) {
 	}
 }
 
-// (3b) Orphan sweep deferred while a young active runner row exists.
-// Protects the gap between InsertRunner and the docker daemon ack.
-func TestReconcile_OrphanGrace_DefersDuringYoungActive(t *testing.T) {
-	st := &fakeStore{rows: []*store.Runner{
-		// StartedAt 10s before now → inside the 5-minute grace.
-		{ContainerName: "gharp-10-dddd", Status: "starting", StartedAt: time.Unix(1_700_000_000-10, 0)},
-	}}
+// (3b) Per-container grace: a young orphan is deferred regardless of
+// what other rows look like.
+func TestReconcile_OrphanGrace_DefersYoungContainer(t *testing.T) {
+	st := &fakeStore{}
 	dk := &fakeDocker{
-		exists:     map[string]bool{"gharp-10-dddd": true},
-		prefixList: []string{"gharp-10-dddd", "gharp-11-eeee"}, // 11 is the orphan
+		exists: map[string]bool{},
+		// CreatedAt 10s before now → inside the 5m grace.
+		prefixList: []ContainerInfo{{Name: "gharp-11-eeee", CreatedAt: time.Unix(1_700_000_000-10, 0)}},
 	}
 	r := newRecon(st, dk)
 	r.Reconcile(context.Background())
 	if len(dk.removed) != 0 {
-		t.Fatalf("orphan removed during grace window: %+v", dk.removed)
+		t.Fatalf("young orphan removed during grace window: %+v", dk.removed)
 	}
 }
 
-// (3c) Once the youngest active runner ages past the grace window,
-// the orphan sweep proceeds.
-func TestReconcile_OrphanGrace_ProceedsAfterAged(t *testing.T) {
+// (3c) Activity-host case: a steady stream of young active rows must
+// NOT defer cleanup of an actually-old orphan. Earlier implementations
+// gated the entire sweep on "any active row younger than grace" and
+// would leak orphans indefinitely under continuous load.
+func TestReconcile_OrphanGrace_PerContainer_NotPerHost(t *testing.T) {
 	st := &fakeStore{rows: []*store.Runner{
-		// StartedAt 10 minutes before now → past the 5m grace.
-		{ContainerName: "gharp-20-ffff", Status: "busy", StartedAt: time.Unix(1_700_000_000-600, 0)},
+		// New dispatch landed 10s ago — would have blocked the old
+		// host-wide-grace logic.
+		{ContainerName: "gharp-fresh-aaaa", Status: "starting", StartedAt: time.Unix(1_700_000_000-10, 0)},
 	}}
 	dk := &fakeDocker{
-		exists:     map[string]bool{"gharp-20-ffff": true},
-		prefixList: []string{"gharp-20-ffff", "gharp-21-gggg"},
+		exists: map[string]bool{"gharp-fresh-aaaa": true},
+		prefixList: []ContainerInfo{
+			{Name: "gharp-fresh-aaaa", CreatedAt: time.Unix(1_700_000_000-10, 0)},   // young, claimed
+			{Name: "gharp-stale-bbbb", CreatedAt: time.Unix(1_700_000_000-3600, 0)}, // 1h old, orphan
+		},
 	}
 	r := newRecon(st, dk)
 	r.Reconcile(context.Background())
-	if len(dk.removed) != 1 || dk.removed[0] != "gharp-21-gggg" {
-		t.Fatalf("expected ForceRemove of orphan only, got %+v", dk.removed)
+	if len(dk.removed) != 1 || dk.removed[0] != "gharp-stale-bbbb" {
+		t.Fatalf("expected only the old orphan removed, got %+v", dk.removed)
+	}
+}
+
+// (3d) CreatedAt zero (parse failure upstream) is treated as old —
+// better to over-clean an undatable orphan than to leak it.
+func TestReconcile_OrphanGrace_ZeroCreatedAtRemoved(t *testing.T) {
+	st := &fakeStore{}
+	dk := &fakeDocker{
+		exists:     map[string]bool{},
+		prefixList: []ContainerInfo{{Name: "gharp-undated-cccc"}}, // CreatedAt is zero
+	}
+	r := newRecon(st, dk)
+	r.Reconcile(context.Background())
+	if len(dk.removed) != 1 || dk.removed[0] != "gharp-undated-cccc" {
+		t.Fatalf("expected ForceRemove of undated orphan, got %+v", dk.removed)
 	}
 }
 

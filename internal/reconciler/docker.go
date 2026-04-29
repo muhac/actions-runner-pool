@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // ExecDocker implements Docker by shelling out to the `docker` CLI.
@@ -42,33 +43,68 @@ func (ExecDocker) Inspect(ctx context.Context, containerName string) (bool, erro
 }
 
 // ListByPrefix asks docker for all containers (any state) whose name
-// matches `prefix*`. The `--filter name=` accepts a substring match,
-// so we also enforce HasPrefix on the result to avoid false positives
-// like a hypothetical `pre-gharp-foo`.
-func (ExecDocker) ListByPrefix(ctx context.Context, prefix string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "name="+prefix, "--format", "{{.Names}}")
+// matches `prefix*`, returning each name with its CreatedAt timestamp
+// so the orphan sweep can do per-container grace gating. The
+// `--filter name=` accepts a substring match, so we also enforce
+// HasPrefix on the result to avoid false positives like
+// `pre-gharp-foo`.
+//
+// Format: `{{.Names}}|{{.CreatedAt}}`. CreatedAt is docker's "human"
+// time string ("2026-04-23 10:35:53 -0400 EDT"), which time.Parse
+// handles via the layout below. Parse failures yield a zero-value
+// CreatedAt — sweepOrphanContainers treats that as "old enough to
+// remove" so an undatable orphan still gets cleaned up.
+func (ExecDocker) ListByPrefix(ctx context.Context, prefix string) ([]ContainerInfo, error) {
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "name="+prefix, "--format", "{{.Names}}|{{.CreatedAt}}")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("docker ps: %w (stderr=%q)", err, stderr.String())
 	}
-	var out []string
+	var out []ContainerInfo
 	sc := bufio.NewScanner(&stdout)
 	for sc.Scan() {
-		name := strings.TrimSpace(sc.Text())
-		if name == "" {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(name, prefix) {
+		name, createdRaw, _ := strings.Cut(line, "|")
+		name = strings.TrimSpace(name)
+		if name == "" || !strings.HasPrefix(name, prefix) {
 			continue
 		}
-		out = append(out, name)
+		info := ContainerInfo{Name: name}
+		if t, err := parseDockerCreatedAt(strings.TrimSpace(createdRaw)); err == nil {
+			info.CreatedAt = t
+		}
+		out = append(out, info)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("scan docker ps output: %w", err)
 	}
 	return out, nil
+}
+
+// parseDockerCreatedAt parses docker's `{{.CreatedAt}}` format, which
+// is a Go time printed via the default String() formatting:
+// "2026-04-23 10:35:53 -0400 EDT". Some installs include nanoseconds
+// or omit the zone abbreviation, so we try a couple of layouts.
+func parseDockerCreatedAt(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty createdAt")
+	}
+	layouts := []string{
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05 -0700",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized createdAt format: %q", s)
 }
 
 // ForceRemove issues `docker rm -f`. A "no such container" outcome

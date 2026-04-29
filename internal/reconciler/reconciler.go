@@ -48,12 +48,24 @@ type Docker interface {
 	// exists (any state). The reconciler only cares about
 	// existence/non-existence; status detail is a later concern.
 	Inspect(ctx context.Context, containerName string) (exists bool, err error)
-	// ListByPrefix returns the names of containers whose name begins
-	// with the given prefix, regardless of state.
-	ListByPrefix(ctx context.Context, prefix string) ([]string, error)
+	// ListByPrefix returns containers whose name begins with the given
+	// prefix, regardless of state, with their docker-reported creation
+	// timestamps. The orphan sweep uses CreatedAt for per-container
+	// grace gating so a steady stream of new dispatches can't
+	// indefinitely defer cleanup of an actually-old orphan.
+	ListByPrefix(ctx context.Context, prefix string) ([]ContainerInfo, error)
 	// ForceRemove issues `docker rm -f` on the given container name. A
 	// "no such container" outcome is treated as success.
 	ForceRemove(ctx context.Context, containerName string) error
+}
+
+// ContainerInfo is what ListByPrefix returns per container. CreatedAt
+// is the docker-reported creation time; if parsing failed it's the
+// zero time and the orphan sweep treats the container as old enough
+// to remove (better to over-clean an undatable orphan than to leak).
+type ContainerInfo struct {
+	Name      string
+	CreatedAt time.Time
 }
 
 // Store is the subset of store.Store the reconciler needs. Defined here
@@ -152,54 +164,42 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 
 // sweepOrphanContainers force-removes containers matching our name
 // prefix that are not represented by an active runner row, AND whose
-// inferred age is past the grace window.
+// own CreatedAt is past the grace window.
 //
-// We can't ask docker for a container's start time without a heavier
-// inspect call, so we approximate "young enough to skip" by reading the
-// most-recent active runner's StartedAt: if any active row was created
-// inside the grace window, we conservatively defer the orphan sweep on
-// the assumption that this orphan might be the half-recorded twin of
-// that runner. This is intentionally crude — false negatives mean an
-// orphan survives one extra tick, which is fine.
+// The grace check is per-container, not per-host: an earlier version
+// deferred the entire sweep whenever any active runner row was younger
+// than the grace, which broke under continuous load — a host with a
+// steady stream of new dispatches would never clean up actual orphans
+// because there was always a young row in the table.
 func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string]struct{}) {
-	names, err := r.docker.ListByPrefix(ctx, ContainerNamePrefix)
+	cs, err := r.docker.ListByPrefix(ctx, ContainerNamePrefix)
 	if err != nil {
 		r.log.Error("reconciler: ListByPrefix failed", "err", err)
 		return
 	}
-	if len(names) == 0 {
+	if len(cs) == 0 {
 		return
 	}
 	now := r.nowFn()
-	// Gather active runners again only if needed for the grace check.
-	// `known` already gives us name set; for age we need StartedAt.
-	rows, err := r.store.ListActiveRunners(ctx)
-	if err != nil {
-		r.log.Error("reconciler: ListActiveRunners (orphan grace) failed", "err", err)
-		return
-	}
-	youngActive := false
-	for _, row := range rows {
-		if now.Sub(row.StartedAt) < r.grace {
-			youngActive = true
-			break
-		}
-	}
-	for _, name := range names {
-		if !strings.HasPrefix(name, ContainerNamePrefix) {
+	for _, c := range cs {
+		if !strings.HasPrefix(c.Name, ContainerNamePrefix) {
 			continue // belt-and-suspenders; ListByPrefix already filtered
 		}
-		if _, ok := known[name]; ok {
+		if _, ok := known[c.Name]; ok {
 			continue
 		}
-		if youngActive {
-			r.log.Debug("reconciler: deferring orphan removal during grace window", "container", name)
+		// Per-container grace: protect the brief window between
+		// `docker run` ack and the InsertRunner row becoming visible.
+		// Zero CreatedAt (parse failure) is treated as old — better to
+		// remove an undatable orphan than to leak it forever.
+		if !c.CreatedAt.IsZero() && now.Sub(c.CreatedAt) < r.grace {
+			r.log.Debug("reconciler: deferring orphan removal during grace window", "container", c.Name, "age", now.Sub(c.CreatedAt))
 			continue
 		}
-		if err := r.docker.ForceRemove(ctx, name); err != nil {
-			r.log.Error("reconciler: ForceRemove failed", "container", name, "err", err)
+		if err := r.docker.ForceRemove(ctx, c.Name); err != nil {
+			r.log.Error("reconciler: ForceRemove failed", "container", c.Name, "err", err)
 			continue
 		}
-		r.log.Info("reconciler: orphan container removed", "container", name)
+		r.log.Info("reconciler: orphan container removed", "container", c.Name)
 	}
 }

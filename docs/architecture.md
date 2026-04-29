@@ -261,10 +261,10 @@ every 60s:
             keep
 
     # orphan container sweep (source 4, the inverse direction)
-    for name in `docker ps -a --filter name=gharp-`:
+    for (name, createdAt) in `docker ps -a --filter name=gharp- --format {{.Names}}|{{.CreatedAt}}`:
         if name not in active runners table:
-            if any active row is younger than 30s grace:
-                defer                               # protect InsertRunner -> daemon-ack race
+            if createdAt is recent (< 30s grace):
+                defer                               # per-container, protects the docker-run -> InsertRunner-visible race
             else:
                 docker rm -f <name>
 ```
