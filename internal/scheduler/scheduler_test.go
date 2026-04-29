@@ -341,7 +341,12 @@ func TestDispatch_ConcurrencyCap_RequeuesWithoutMintingTokens(t *testing.T) {
 	}
 }
 
-func TestDispatch_NoInstallation_StaysPending(t *testing.T) {
+// dispatch must not just leave the row pending forever — that's the
+// race symptom: a queued webhook lost the cancel pass triggered by an
+// installation removal, the row sits pending, replay picks it up next
+// tick, dispatch loops on a missing installation forever. Cancelling
+// here breaks the loop.
+func TestDispatch_NoInstallation_CancelsJob(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedPendingJob(t, st, 1, "owner/repo") // no installation row
@@ -359,8 +364,8 @@ func TestDispatch_NoInstallation_StaysPending(t *testing.T) {
 		t.Fatalf("Launch called without an installation: %d", ln.calls.Load())
 	}
 	job, _ := st.GetJob(context.Background(), 1)
-	if job == nil || job.Status != "pending" {
-		t.Fatalf("job status=%v, want pending", job)
+	if job == nil || job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job = %+v, want completed/cancelled", job)
 	}
 }
 

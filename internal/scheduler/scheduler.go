@@ -151,7 +151,16 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 	if inst == nil {
-		s.log.Warn("dispatch: no installation for repo; leaving pending", "job_id", jobID, "repo", job.Repo)
+		// No installation for this repo. Almost always means a removal
+		// webhook (installation:deleted / installation_repositories:
+		// removed) raced this dispatch and won — the cancel pass that
+		// runs alongside RemoveRepoInstallation may have missed our row
+		// because the queued webhook inserted it after the cancel
+		// query. Cancel here so the row stops looping through replay.
+		s.log.Info("dispatch: no installation for repo; cancelling job", "job_id", jobID, "repo", job.Repo)
+		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
+			s.log.Error("dispatch: MarkJobCompleted(cancelled) after missing installation failed", "job_id", jobID, "err", err)
+		}
 		return
 	}
 
