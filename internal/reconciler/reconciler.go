@@ -22,9 +22,16 @@
 //     few hundred ms). Also covers the rare case where a `gharp-`
 //     named container appears via a non-standard launch path.
 //
-// Out of scope for this pass: GitHub-side ghost runner deregistration,
-// idle-timeout reaping, dispatch-time live cap checks. See
-// docs/architecture.md §"Ghost runners and reconciliation".
+//  3. GitHub-side ghost runner: a runner is registered with GitHub
+//     under our `containerNamePrefix` namespace but no active row in
+//     our table claims it. Force-deregister via DELETE /actions/
+//     runners/{id}. Runs on a slower 5-minute cadence to bound
+//     install-token quota usage. Skipped entirely when the
+//     Reconciler was constructed with a nil GitHubClient.
+//
+// Out of scope for this pass: idle-timeout reaping, dispatch-time
+// live cap checks. See docs/architecture.md §"Ghost runners and
+// reconciliation".
 package reconciler
 
 import (
@@ -33,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
@@ -78,13 +86,37 @@ type ContainerInfo struct {
 type Store interface {
 	ListActiveRunners(ctx context.Context) ([]*store.Runner, error)
 	UpdateRunnerStatus(ctx context.Context, containerName, status string) error
+	// Below: needed only by the GitHub-side ghost sweep. Optional in
+	// the sense that a Reconciler with a nil GitHubClient will never
+	// call these — passing a Store that returns errors here is fine
+	// when GitHub-side cleanup is disabled.
+	GetAppConfig(ctx context.Context) (*store.AppConfig, error)
+	// ListAllInstallationRepos drives the GitHub-side sweep. Iterating
+	// every installed repo (rather than only repos with active rows)
+	// catches ghosts left behind after a deployment goes idle — the
+	// docker side of those ghosts is already cleaned up locally, so
+	// without this iteration GitHub would hold the registration
+	// until its own ~30-day timeout.
+	ListAllInstallationRepos(ctx context.Context) ([]store.RepoInstallation, error)
+}
+
+// GitHubClient is the subset of *github.Client the GitHub-side ghost
+// sweep depends on. nil disables that sweep entirely (the docker-side
+// sweeps still run on the normal cadence).
+type GitHubClient interface {
+	AppJWT(pem []byte, appID int64) (string, error)
+	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
+	ListRepoRunners(ctx context.Context, installationToken, repoFullName string) ([]github.RepoRunner, error)
+	DeleteRepoRunner(ctx context.Context, installationToken, repoFullName string, runnerID int64) error
 }
 
 type Reconciler struct {
 	store               Store
 	docker              Docker
+	gh                  GitHubClient // nil disables the GitHub-side sweep
 	log                 *slog.Logger
 	period              time.Duration
+	githubSweepPeriod   time.Duration
 	grace               time.Duration
 	maxLifetime         time.Duration
 	containerNamePrefix string
@@ -98,16 +130,25 @@ type Reconciler struct {
 // (no in_progress webhook ever arrives, the cap slot is held forever
 // otherwise). containerNamePrefix scopes the orphan sweep so it only
 // touches containers this deployment owns; pass "" to fall back to
-// DefaultContainerNamePrefix.
-func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix string) *Reconciler {
+// DefaultContainerNamePrefix. gh is optional — pass nil to skip the
+// GitHub-side ghost-runner sweep entirely (useful for tests, or
+// deployments that prefer to let GitHub auto-expire stale
+// registrations on its own).
+func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix string) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
 	}
 	return &Reconciler{
 		store:  st,
 		docker: dk,
+		gh:     gh,
 		log:    log,
 		period: 60 * time.Second,
+		// GitHub /runners is rate-limited (5000 req/h per install
+		// token) and most ghost rows already get cleared by the
+		// docker-side sweep on the normal cadence; running this
+		// every 5 ticks (5min) is plenty.
+		githubSweepPeriod: 5 * time.Minute,
 		// Orphan grace: protect very new containers from sweep during
 		// short-lived docker-vs-DB visibility skew. InsertRunner
 		// commits on the writer connection BEFORE the launcher's
@@ -121,12 +162,16 @@ func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration, conta
 	}
 }
 
-// Run blocks until ctx is cancelled. Ticks every period; each tick is
-// a single Reconcile call. Reconcile errors are logged, never
-// propagated — the loop must keep running across transient docker
-// hiccups.
+// Run blocks until ctx is cancelled. The docker-side sweep runs on the
+// main reconciler loop because it owns cap-deadlock cleanup. The slower
+// GitHub-side sweep runs in its own serial goroutine so slow GitHub API
+// calls cannot delay local docker cleanup. Errors are logged, never
+// propagated.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.Reconcile(ctx)
+	if r.gh != nil {
+		go r.runGitHubSweeper(ctx)
+	}
 	t := time.NewTicker(r.period)
 	defer t.Stop()
 	for {
@@ -135,6 +180,20 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-t.C:
 			r.Reconcile(ctx)
+		}
+	}
+}
+
+func (r *Reconciler) runGitHubSweeper(ctx context.Context) {
+	r.sweepGitHubGhostRunners(ctx)
+	t := time.NewTicker(r.githubSweepPeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.sweepGitHubGhostRunners(ctx)
 		}
 	}
 }
@@ -267,4 +326,145 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 		removed++
 	}
 	return removed
+}
+
+// sweepGitHubGhostRunners walks every repo the App is installed on
+// and, for each one, calls GitHub's /actions/runners API. Any runner
+// whose name starts with `containerNamePrefix` and isn't claimed by
+// an active row in our DB is force-deregistered. This catches
+// runners that:
+//   - exited their EPHEMERAL job cleanly but `--rm` removed the
+//     container before our completed webhook updated the DB (the
+//     usual cause of GitHub-side ghost rows accumulating);
+//   - we never persisted because of a process crash mid-launch;
+//   - belong to long-since-removed deployments sharing this App.
+//
+// Iteration source is `ListAllInstallationRepos` (mirroring the
+// docker prefix sweep's "list everything matching, ignore DB"
+// approach) — limiting to repos with active rows would miss ghosts
+// left behind after a deployment goes idle.
+//
+// Cost is bounded: one install-token mint + one GET /runners + one
+// DELETE per ghost per unique repo, every githubSweepPeriod (default
+// 5min). Errors at any stage are logged but don't stop the sweep —
+// other repos still get processed.
+func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
+	if r.gh == nil {
+		return
+	}
+	repos, err := r.store.ListAllInstallationRepos(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: ListAllInstallationRepos failed", "err", err)
+		return
+	}
+	if len(repos) == 0 {
+		r.log.Debug("reconciler/github: no installed repos; skipping sweep")
+		return
+	}
+
+	rows, err := r.store.ListActiveRunners(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: ListActiveRunners failed", "err", err)
+		return
+	}
+	// Build (repo -> set of runner names we own from active rows).
+	// Repos absent from `known` mean "no active runners" — for those
+	// repos, every prefixed runner GitHub reports is a candidate for
+	// deletion.
+	known := map[string]map[string]struct{}{}
+	for _, row := range rows {
+		set, ok := known[row.Repo]
+		if !ok {
+			set = map[string]struct{}{}
+			known[row.Repo] = set
+		}
+		set[row.RunnerName] = struct{}{}
+	}
+
+	appCfg, err := r.store.GetAppConfig(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: GetAppConfig failed; skipping sweep", "err", err)
+		return
+	}
+	if appCfg == nil {
+		r.log.Debug("reconciler/github: app config not set; skipping sweep")
+		return
+	}
+	jwt, err := r.gh.AppJWT(appCfg.PEM, appCfg.AppID)
+	if err != nil {
+		r.log.Error("reconciler/github: AppJWT failed; skipping sweep", "err", err)
+		return
+	}
+
+	// Per-installation token cache. Repos sharing an installation
+	// share the same token — minting per repo would burn quota for
+	// no benefit.
+	tokens := map[int64]string{}
+	totalDeleted := 0
+	for _, ri := range repos {
+		tok, ok := tokens[ri.InstallationID]
+		if !ok {
+			tok, err = r.gh.InstallationToken(ctx, jwt, ri.InstallationID)
+			if err != nil {
+				r.log.Error("reconciler/github: InstallationToken failed", "repo", ri.Repo, "installation_id", ri.InstallationID, "err", err)
+				continue
+			}
+			tokens[ri.InstallationID] = tok
+		}
+		runners, err := r.gh.ListRepoRunners(ctx, tok, ri.Repo)
+		if err != nil {
+			r.log.Error("reconciler/github: ListRepoRunners failed", "repo", ri.Repo, "err", err)
+			continue
+		}
+		ours := known[ri.Repo] // nil set is fine — no active rows for this repo
+		for _, gr := range runners {
+			// Only touch runners whose name matches our prefix —
+			// otherwise we'd reach into other deployments sharing
+			// the same App installation.
+			if !strings.HasPrefix(gr.Name, r.containerNamePrefix) {
+				continue
+			}
+			if _, mine := ours[gr.Name]; mine {
+				continue
+			}
+			// Belt-and-suspenders: don't delete a runner GitHub
+			// still says is busy. If it's busy with one of OUR
+			// jobs, our DB has it; if it's busy with someone
+			// else's job, deletion would interrupt them.
+			if gr.Busy {
+				r.log.Debug("reconciler/github: skipping busy ghost runner", "repo", ri.Repo, "runner", gr.Name)
+				continue
+			}
+			stillActive, err := r.activeRunnerExists(ctx, ri.Repo, gr.Name)
+			if err != nil {
+				r.log.Error("reconciler/github: ListActiveRunners recheck failed; skipping delete", "repo", ri.Repo, "runner_name", gr.Name, "err", err)
+				continue
+			}
+			if stillActive {
+				r.log.Debug("reconciler/github: skipping runner found during active recheck", "repo", ri.Repo, "runner", gr.Name)
+				continue
+			}
+			if err := r.gh.DeleteRepoRunner(ctx, tok, ri.Repo, gr.ID); err != nil {
+				r.log.Error("reconciler/github: DeleteRepoRunner failed", "repo", ri.Repo, "runner_id", gr.ID, "runner_name", gr.Name, "err", err)
+				continue
+			}
+			r.log.Info("reconciler/github: deregistered ghost runner", "repo", ri.Repo, "runner_id", gr.ID, "runner_name", gr.Name)
+			totalDeleted++
+		}
+	}
+	r.log.Debug("reconciler/github: sweep complete",
+		"repos", len(repos), "deleted", totalDeleted)
+}
+
+func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName string) (bool, error) {
+	rows, err := r.store.ListActiveRunners(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if row.Repo == repo && row.RunnerName == runnerName {
+			return true, nil
+		}
+	}
+	return false, nil
 }

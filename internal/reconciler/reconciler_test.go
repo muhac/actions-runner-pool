@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
@@ -17,11 +19,15 @@ func quietLog() *slog.Logger {
 }
 
 type fakeStore struct {
-	mu      sync.Mutex
-	rows    []*store.Runner
-	updates []update
-	listErr error
-	updErr  error
+	mu            sync.Mutex
+	rows          []*store.Runner
+	activeByCall  [][]*store.Runner
+	activeCalls   int
+	updates       []update
+	listErr       error
+	updErr        error
+	appCfg        *store.AppConfig
+	installations map[string]*store.Installation
 }
 
 type update struct {
@@ -31,8 +37,18 @@ type update struct {
 func (f *fakeStore) ListActiveRunners(ctx context.Context) ([]*store.Runner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.activeCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
+	}
+	if len(f.activeByCall) > 0 {
+		idx := f.activeCalls - 1
+		if idx >= len(f.activeByCall) {
+			idx = len(f.activeByCall) - 1
+		}
+		out := make([]*store.Runner, len(f.activeByCall[idx]))
+		copy(out, f.activeByCall[idx])
+		return out, nil
 	}
 	out := make([]*store.Runner, len(f.rows))
 	copy(out, f.rows)
@@ -60,14 +76,56 @@ func (f *fakeStore) UpdateRunnerStatus(ctx context.Context, container, status st
 	return nil
 }
 
+// GetAppConfig + InstallationForRepo: only the GitHub-side sweep
+// touches these. The fake returns nil to make any accidental call
+// surface as a clean "no app config / no installation" log line in
+// tests that don't intentionally exercise the GitHub sweep.
+func (f *fakeStore) GetAppConfig(ctx context.Context) (*store.AppConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.appCfg, nil
+}
+
+func (f *fakeStore) InstallationForRepo(ctx context.Context, repo string) (*store.Installation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.installations == nil {
+		return nil, nil
+	}
+	return f.installations[repo], nil
+}
+
+// ListAllInstallationRepos: tests opt in by setting f.installations
+// (the same map InstallationForRepo reads). Iteration order matters
+// for some assertions, so sort by repo name.
+func (f *fakeStore) ListAllInstallationRepos(ctx context.Context) ([]store.RepoInstallation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	repos := make([]string, 0, len(f.installations))
+	for r := range f.installations {
+		repos = append(repos, r)
+	}
+	sort.Strings(repos)
+	out := make([]store.RepoInstallation, 0, len(repos))
+	for _, r := range repos {
+		inst := f.installations[r]
+		if inst == nil {
+			continue
+		}
+		out = append(out, store.RepoInstallation{Repo: r, InstallationID: inst.ID})
+	}
+	return out, nil
+}
+
 type fakeDocker struct {
-	mu          sync.Mutex
-	exists      map[string]bool
-	prefixList  []ContainerInfo
-	removed     []string
-	inspectErr  error
-	listErr     error
-	removeErr   error
+	mu           sync.Mutex
+	exists       map[string]bool
+	prefixList   []ContainerInfo
+	removed      []string
+	inspectCalls int
+	inspectErr   error
+	listErr      error
+	removeErr    error
 }
 
 func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
@@ -76,6 +134,7 @@ func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
 	if f.inspectErr != nil {
 		return false, f.inspectErr
 	}
+	f.inspectCalls++
 	return f.exists[name], nil
 }
 
@@ -101,7 +160,7 @@ func (f *fakeDocker) ForceRemove(ctx context.Context, name string) error {
 }
 
 func newRecon(st Store, dk Docker) *Reconciler {
-	r := New(st, dk, quietLog(), 1*time.Hour, "gharp-")
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-")
 	r.period = 10 * time.Millisecond
 	r.grace = 5 * time.Minute
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
@@ -293,4 +352,272 @@ func TestRun_ContextCancel(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
+}
+
+func TestRun_GitHubSweepDoesNotBlockDockerLoop(t *testing.T) {
+	st := &fakeStore{
+		rows: []*store.Runner{
+			{ContainerName: "gharp-live", RunnerName: "gharp-live", Repo: "alice/repo", Status: "idle", StartedAt: time.Unix(1_700_000_000-60, 0)},
+		},
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-live": true}}
+	ghBlock := make(chan struct{})
+	gh := &fakeGH{listBlock: ghBlock, runnersByRepo: map[string][]github.RepoRunner{"alice/repo": nil}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.period = 10 * time.Millisecond
+	r.githubSweepPeriod = time.Hour
+	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	defer func() {
+		close(ghBlock)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Run did not return after cancel")
+		}
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		gh.mu.Lock()
+		blocked := gh.listCalls > 0
+		gh.mu.Unlock()
+		if blocked {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("GitHub sweep did not reach ListRepoRunners")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	deadline = time.After(time.Second)
+	for {
+		dk.mu.Lock()
+		inspectCalls := dk.inspectCalls
+		dk.mu.Unlock()
+		if inspectCalls >= 3 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("docker loop blocked behind GitHub sweep; inspect calls=%d", inspectCalls)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// --- GitHub-side ghost sweep --------------------------------------
+
+type fakeGH struct {
+	mu             sync.Mutex
+	runnersByRepo  map[string][]github.RepoRunner
+	deleted        []deletedRunner
+	listBlock      chan struct{}
+	listErr        error
+	deleteErr      error
+	jwtErr         error
+	instTokenErr   error
+	jwtCalls       int
+	instTokenCalls int
+	listCalls      int
+	deleteCalls    int
+}
+
+type deletedRunner struct {
+	repo string
+	id   int64
+}
+
+func (g *fakeGH) AppJWT(_ []byte, _ int64) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.jwtCalls++
+	if g.jwtErr != nil {
+		return "", g.jwtErr
+	}
+	return "jwt", nil
+}
+func (g *fakeGH) InstallationToken(_ context.Context, _ string, _ int64) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.instTokenCalls++
+	if g.instTokenErr != nil {
+		return "", g.instTokenErr
+	}
+	return "inst", nil
+}
+func (g *fakeGH) ListRepoRunners(_ context.Context, _ string, repo string) ([]github.RepoRunner, error) {
+	g.mu.Lock()
+	g.listCalls++
+	if g.listErr != nil {
+		g.mu.Unlock()
+		return nil, g.listErr
+	}
+	g.mu.Unlock()
+	if g.listBlock != nil {
+		<-g.listBlock
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.runnersByRepo[repo], nil
+}
+func (g *fakeGH) DeleteRepoRunner(_ context.Context, _ string, repo string, id int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.deleteCalls++
+	if g.deleteErr != nil {
+		return g.deleteErr
+	}
+	g.deleted = append(g.deleted, deletedRunner{repo, id})
+	return nil
+}
+
+// (4) GitHub has runners that we no longer have rows for -> DELETE.
+// Runner #1 is ours (matches an active row by name) -> preserved.
+// Runner #2 is in our prefix namespace but not in the table -> DELETE.
+// Runner #3 has the wrong prefix entirely -> preserved (not ours).
+// Runner #4 is busy -> preserved (don't interrupt someone's job even
+// if we can't account for it).
+func TestReconcile_GitHubGhostSweep_DeletesUnknownRunners(t *testing.T) {
+	st := &fakeStore{
+		rows: []*store.Runner{
+			{ContainerName: "gharp-1-aaaa", RunnerName: "gharp-1-aaaa", Repo: "alice/repo", Status: "busy", StartedAt: time.Unix(1_700_000_000-60, 0)},
+		},
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-1-aaaa": true}}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/repo": {
+			{ID: 11, Name: "gharp-1-aaaa", Status: "online", Busy: true},
+			{ID: 12, Name: "gharp-9-zzzz", Status: "online", Busy: false},
+			{ID: 13, Name: "other-system-runner", Status: "online", Busy: false},
+			{ID: 14, Name: "gharp-7-busy", Status: "online", Busy: true},
+		},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
+	r.sweepGitHubGhostRunners(context.Background())
+
+	if len(gh.deleted) != 1 {
+		t.Fatalf("expected 1 DELETE, got %+v", gh.deleted)
+	}
+	if gh.deleted[0] != (deletedRunner{"alice/repo", 12}) {
+		t.Fatalf("wrong runner deleted: %+v", gh.deleted[0])
+	}
+}
+
+// No installed repos at all (no app, no installations) -> no work,
+// no token mint. The sweep short-circuits cheaply when there's
+// literally nothing to inspect.
+func TestReconcile_GitHubGhostSweep_NoInstalledRepos_NoOp(t *testing.T) {
+	st := &fakeStore{appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")}}
+	dk := &fakeDocker{}
+	gh := &fakeGH{}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background())
+	if gh.jwtCalls != 0 || gh.instTokenCalls != 0 || gh.listCalls != 0 {
+		t.Fatalf("idle deployment burned API: jwt=%d inst=%d list=%d",
+			gh.jwtCalls, gh.instTokenCalls, gh.listCalls)
+	}
+}
+
+// Repo has zero active rows but is in installation_repos -> the sweep
+// must still query GitHub for that repo and clear any prefixed ghost
+// runners. This is the "deployment goes idle, then GitHub-side
+// ghosts pile up" failure mode.
+func TestReconcile_GitHubGhostSweep_IdleRepoWithGhost_Cleared(t *testing.T) {
+	st := &fakeStore{
+		// No active rows.
+		rows:          nil,
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/repo": {
+			{ID: 42, Name: "gharp-stale-deadbeef", Status: "offline", Busy: false},
+			{ID: 43, Name: "other-system-runner", Status: "online", Busy: false},
+		},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background())
+	if len(gh.deleted) != 1 || gh.deleted[0] != (deletedRunner{"alice/repo", 42}) {
+		t.Fatalf("expected DELETE of gharp-stale-deadbeef from alice/repo, got %+v", gh.deleted)
+	}
+}
+
+func TestReconcile_GitHubGhostSweep_RechecksActiveRunnerBeforeDelete(t *testing.T) {
+	st := &fakeStore{
+		activeByCall: [][]*store.Runner{
+			nil,
+			{
+				{ContainerName: "gharp-new-runner", RunnerName: "gharp-new-runner", Repo: "alice/repo", Status: "starting", StartedAt: time.Unix(1_700_000_000, 0)},
+			},
+		},
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/repo": {
+			{ID: 42, Name: "gharp-new-runner", Status: "online", Busy: false},
+		},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background())
+	if len(gh.deleted) != 0 {
+		t.Fatalf("new active runner deleted after recheck: %+v", gh.deleted)
+	}
+	if st.activeCalls < 2 {
+		t.Fatalf("expected active runner recheck before delete, got %d calls", st.activeCalls)
+	}
+}
+
+// Multiple repos under one installation share a single install
+// token: 2 repos -> 1 InstallationToken call, 2 ListRepoRunners
+// calls. Matters because tokens cost rate limit at /app/.../tokens.
+func TestReconcile_GitHubGhostSweep_TokenCachedPerInstallation(t *testing.T) {
+	st := &fakeStore{
+		rows: []*store.Runner{
+			{ContainerName: "gharp-1-a", RunnerName: "gharp-1-a", Repo: "alice/r1", Status: "busy", StartedAt: time.Unix(1_700_000_000-60, 0)},
+			{ContainerName: "gharp-2-a", RunnerName: "gharp-2-a", Repo: "alice/r2", Status: "busy", StartedAt: time.Unix(1_700_000_000-60, 0)},
+		},
+		appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{
+			"alice/r1": {ID: 99},
+			"alice/r2": {ID: 99}, // same install
+		},
+	}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-1-a": true, "gharp-2-a": true}}
+	gh := &fakeGH{runnersByRepo: map[string][]github.RepoRunner{
+		"alice/r1": {{ID: 11, Name: "gharp-1-a", Status: "online"}},
+		"alice/r2": {{ID: 12, Name: "gharp-2-a", Status: "online"}},
+	}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
+	r.sweepGitHubGhostRunners(context.Background())
+	if gh.instTokenCalls != 1 {
+		t.Fatalf("expected 1 InstallationToken (cached), got %d", gh.instTokenCalls)
+	}
+	if gh.listCalls != 2 {
+		t.Fatalf("expected 2 ListRepoRunners (one per repo), got %d", gh.listCalls)
+	}
+}
+
+// nil GitHubClient disables the sweep entirely; constructing with
+// nil + calling Reconcile + Run must not panic.
+func TestReconcile_GitHubGhostSweep_NilGH_Disabled(t *testing.T) {
+	st := &fakeStore{}
+	dk := &fakeDocker{}
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-")
+	r.sweepGitHubGhostRunners(context.Background()) // no panic
 }
