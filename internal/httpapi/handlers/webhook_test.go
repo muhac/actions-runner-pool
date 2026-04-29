@@ -137,6 +137,36 @@ func TestWebhook_InstallationRepositoriesAddedRemoved(t *testing.T) {
 	if len(st.removedRepoInstallation) != 1 || st.removedRepoInstallation[0] != "alice/gone" {
 		t.Errorf("expected remove alice/gone, got %+v", st.removedRepoInstallation)
 	}
+	// New behavior: removed repos must also have their pending jobs
+	// cancelled, otherwise dispatch keeps trying to mint a token for
+	// an installation that no longer covers them.
+	if len(st.cancelledForRepo) != 1 || st.cancelledForRepo[0] != "alice/gone" {
+		t.Errorf("expected CancelPendingJobsForRepo(alice/gone), got %+v", st.cancelledForRepo)
+	}
+}
+
+// installation:deleted means the App was uninstalled. We must (a)
+// drop the repo->installation rows for every covered repo so dispatch
+// stops trying to mint tokens, and (b) cancel any still-dispatchable
+// jobs so they don't sit pending forever.
+func TestWebhook_InstallationDeleted_CancelsAndUnmaps(t *testing.T) {
+	body := []byte(`{
+		"action": "deleted",
+		"installation": {"id": 99, "account": {"id": 7, "login": "alice", "type": "User"}},
+		"repositories": [{"full_name": "alice/repo1"}, {"full_name": "alice/repo2"}]
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "installation", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.cancelledForRepo) != 2 {
+		t.Fatalf("expected 2 CancelPendingJobsForRepo calls, got %+v", st.cancelledForRepo)
+	}
+	if len(st.removedRepoInstallation) != 2 {
+		t.Fatalf("expected 2 RemoveRepoInstallation calls, got %+v", st.removedRepoInstallation)
+	}
 }
 
 const queuedJobBody = `{

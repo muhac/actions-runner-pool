@@ -143,8 +143,24 @@ func (h *WebhookHandler) handleInstallation(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	case "deleted":
+		// The App was uninstalled. Remove the repo→installation rows and
+		// cancel any still-dispatchable jobs for those repos: dispatch
+		// would otherwise loop forever on jobs whose installation token
+		// can no longer be minted (and the user already told GitHub
+		// they're done with this).
+		for _, repo := range ev.Repositories {
+			n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
+			if err != nil {
+				h.logError("cancel pending jobs after installation deleted", err)
+			} else if n > 0 && h.Log != nil {
+				h.Log.Info("installation deleted: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
+			}
+			if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
+				h.logError("remove repo->installation after installation deleted", err)
+			}
+		}
 		if h.Log != nil {
-			h.Log.Info("installation deleted (not removing rows in v1)", "installation_id", ev.Installation.ID)
+			h.Log.Info("installation deleted", "installation_id", ev.Installation.ID, "repos", len(ev.Repositories))
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -177,6 +193,15 @@ func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r
 		}
 	}
 	for _, repo := range ev.RepositoriesRemoved {
+		// Cancel before removing the installation mapping so dispatch,
+		// if it raced us, finds the same "no longer dispatchable" state
+		// the install removal implies.
+		n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
+		if err != nil {
+			h.logError("cancel pending jobs after repo removed", err)
+		} else if n > 0 && h.Log != nil {
+			h.Log.Info("repo removed from installation: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
+		}
 		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
 			h.logError("remove repo->installation", err)
 		}

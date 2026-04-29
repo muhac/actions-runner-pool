@@ -398,6 +398,56 @@ func TestUpdateRunnerStatusByName_MatchesRunnerNameNotContainer(t *testing.T) {
 	}
 }
 
+// Repo-scoped cancel: only pending/dispatched rows for that repo
+// transition; rows for other repos and rows already in terminal states
+// must be left alone (otherwise we'd retroactively rewrite history of
+// jobs that already ran).
+func TestCancelPendingJobsForRepo_OnlyPendingAndDispatched(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	rows := []*Job{
+		{ID: 1, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "1", Status: "pending"},
+		{ID: 2, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "2", Status: "dispatched"},
+		{ID: 3, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "3", Status: "in_progress"},
+		{ID: 4, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "4", Status: "completed"},
+		{ID: 5, Repo: "other/repo", Action: "queued", Labels: "x", DedupeKey: "5", Status: "pending"},
+	}
+	for _, j := range rows {
+		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+			t.Fatalf("seed %d: %v", j.ID, err)
+		}
+	}
+
+	n, err := s.CancelPendingJobsForRepo(ctx, "a/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("affected rows = %d, want 2 (the pending + dispatched on a/b)", n)
+	}
+
+	type row struct {
+		status, conclusion string
+	}
+	got := map[int64]row{}
+	for _, id := range []int64{1, 2, 3, 4, 5} {
+		j, err := s.GetJob(ctx, id)
+		if err != nil || j == nil {
+			t.Fatalf("get %d: %v / %v", id, err, j)
+		}
+		got[id] = row{j.Status, j.Conclusion}
+	}
+	if got[1] != (row{"completed", "cancelled"}) || got[2] != (row{"completed", "cancelled"}) {
+		t.Fatalf("pending+dispatched rows wrong: %+v", got)
+	}
+	if got[3].status != "in_progress" || got[4].status != "completed" {
+		t.Fatalf("non-pending rows on a/b mutated: %+v", got)
+	}
+	if got[5] != (row{"pending", ""}) {
+		t.Fatalf("other-repo row mutated: %+v", got[5])
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"

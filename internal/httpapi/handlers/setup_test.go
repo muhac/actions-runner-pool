@@ -30,6 +30,7 @@ type fakeStore struct {
 	insertJobErr             error
 	markedInProgress         []markedInProgress
 	markedCompleted          []markedCompleted
+	cancelledForRepo         []string
 	updatedRunnerByName      []runnerStatusUpdate
 }
 
@@ -112,6 +113,11 @@ func (f *fakeStore) MarkJobInProgress(_ context.Context, jobID, runnerID int64, 
 func (f *fakeStore) MarkJobCompleted(_ context.Context, jobID int64, conclusion string) error {
 	f.markedCompleted = append(f.markedCompleted, markedCompleted{jobID, conclusion})
 	return nil
+}
+
+func (f *fakeStore) CancelPendingJobsForRepo(_ context.Context, repo string) (int64, error) {
+	f.cancelledForRepo = append(f.cancelledForRepo, repo)
+	return 0, nil
 }
 
 func (f *fakeStore) UpdateRunnerStatusByName(_ context.Context, runnerName, status string) error {
