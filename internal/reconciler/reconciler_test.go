@@ -118,13 +118,14 @@ func (f *fakeStore) ListAllInstallationRepos(ctx context.Context) ([]store.RepoI
 }
 
 type fakeDocker struct {
-	mu         sync.Mutex
-	exists     map[string]bool
-	prefixList []ContainerInfo
-	removed    []string
-	inspectErr error
-	listErr    error
-	removeErr  error
+	mu           sync.Mutex
+	exists       map[string]bool
+	prefixList   []ContainerInfo
+	removed      []string
+	inspectCalls int
+	inspectErr   error
+	listErr      error
+	removeErr    error
 }
 
 func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
@@ -133,6 +134,7 @@ func (f *fakeDocker) Inspect(ctx context.Context, name string) (bool, error) {
 	if f.inspectErr != nil {
 		return false, f.inspectErr
 	}
+	f.inspectCalls++
 	return f.exists[name], nil
 }
 
@@ -352,12 +354,73 @@ func TestRun_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestRun_GitHubSweepDoesNotBlockDockerLoop(t *testing.T) {
+	st := &fakeStore{
+		rows: []*store.Runner{
+			{ContainerName: "gharp-live", RunnerName: "gharp-live", Repo: "alice/repo", Status: "idle", StartedAt: time.Unix(1_700_000_000-60, 0)},
+		},
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{"alice/repo": {ID: 99}},
+	}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-live": true}}
+	ghBlock := make(chan struct{})
+	gh := &fakeGH{listBlock: ghBlock, runnersByRepo: map[string][]github.RepoRunner{"alice/repo": nil}}
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-")
+	r.period = 10 * time.Millisecond
+	r.githubSweepPeriod = time.Hour
+	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	defer func() {
+		close(ghBlock)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Run did not return after cancel")
+		}
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		gh.mu.Lock()
+		blocked := gh.listCalls > 0
+		gh.mu.Unlock()
+		if blocked {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("GitHub sweep did not reach ListRepoRunners")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	deadline = time.After(time.Second)
+	for {
+		dk.mu.Lock()
+		inspectCalls := dk.inspectCalls
+		dk.mu.Unlock()
+		if inspectCalls >= 3 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("docker loop blocked behind GitHub sweep; inspect calls=%d", inspectCalls)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // --- GitHub-side ghost sweep --------------------------------------
 
 type fakeGH struct {
 	mu             sync.Mutex
 	runnersByRepo  map[string][]github.RepoRunner
 	deleted        []deletedRunner
+	listBlock      chan struct{}
 	listErr        error
 	deleteErr      error
 	jwtErr         error
@@ -393,11 +456,17 @@ func (g *fakeGH) InstallationToken(_ context.Context, _ string, _ int64) (string
 }
 func (g *fakeGH) ListRepoRunners(_ context.Context, _ string, repo string) ([]github.RepoRunner, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.listCalls++
 	if g.listErr != nil {
+		g.mu.Unlock()
 		return nil, g.listErr
 	}
+	g.mu.Unlock()
+	if g.listBlock != nil {
+		<-g.listBlock
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.runnersByRepo[repo], nil
 }
 func (g *fakeGH) DeleteRepoRunner(_ context.Context, _ string, repo string, id int64) error {

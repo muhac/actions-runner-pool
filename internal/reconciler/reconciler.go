@@ -162,32 +162,37 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 	}
 }
 
-// Run blocks until ctx is cancelled. Two tickers run concurrently:
-// `period` (60s) drives the docker-side sweeps; `githubSweepPeriod`
-// (5min) drives the slower GitHub-side sweep. The slower cadence
-// keeps GitHub API rate-limit usage bounded — most ghost rows get
-// cleared by the docker sweep on the normal cadence anyway. Errors
-// are logged, never propagated.
+// Run blocks until ctx is cancelled. The docker-side sweep runs on the
+// main reconciler loop because it owns cap-deadlock cleanup. The slower
+// GitHub-side sweep runs in its own serial goroutine so slow GitHub API
+// calls cannot delay local docker cleanup. Errors are logged, never
+// propagated.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.Reconcile(ctx)
 	if r.gh != nil {
-		r.sweepGitHubGhostRunners(ctx)
+		go r.runGitHubSweeper(ctx)
 	}
 	t := time.NewTicker(r.period)
 	defer t.Stop()
-	var ghTick <-chan time.Time
-	if r.gh != nil {
-		ghT := time.NewTicker(r.githubSweepPeriod)
-		defer ghT.Stop()
-		ghTick = ghT.C
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
 			r.Reconcile(ctx)
-		case <-ghTick:
+		}
+	}
+}
+
+func (r *Reconciler) runGitHubSweeper(ctx context.Context) {
+	r.sweepGitHubGhostRunners(ctx)
+	t := time.NewTicker(r.githubSweepPeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 			r.sweepGitHubGhostRunners(ctx)
 		}
 	}
