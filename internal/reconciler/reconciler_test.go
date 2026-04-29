@@ -101,7 +101,7 @@ func (f *fakeDocker) ForceRemove(ctx context.Context, name string) error {
 }
 
 func newRecon(st Store, dk Docker) *Reconciler {
-	r := New(st, dk, quietLog(), 1*time.Hour)
+	r := New(st, dk, quietLog(), 1*time.Hour, "gharp-")
 	r.period = 10 * time.Millisecond
 	r.grace = 5 * time.Minute
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }

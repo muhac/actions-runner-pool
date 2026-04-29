@@ -17,6 +17,13 @@ type Config struct {
 	BaseURL              string
 	StoreDSN             string
 	RunnerImage          string
+	// RunnerNamePrefix scopes both the container/runner names the
+	// scheduler generates AND the orphan sweep the reconciler
+	// performs. Default "gharp-". Override to isolate a deployment
+	// from sibling deployments sharing the same docker daemon (e.g.
+	// integration tests setting a unique per-run prefix so the
+	// reconciler doesn't reach into other deployments' containers).
+	RunnerNamePrefix     string
 	RunnerCommand        []string
 	RunnerLabels         []string
 	// runnerLabelSet is the precomputed lower-cased + trimmed set of
@@ -61,6 +68,7 @@ func Load() (*Config, error) {
 		BaseURL:              strings.TrimRight(os.Getenv("BASE_URL"), "/"),
 		StoreDSN:             envOr("STORE_DSN", "file:gharp.db?_pragma=journal_mode(WAL)"),
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
+		RunnerNamePrefix:     envOr("RUNNER_NAME_PREFIX", "gharp-"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
@@ -84,6 +92,13 @@ func Load() (*Config, error) {
 		// neither is what an operator could reasonably want, so reject
 		// at startup rather than degrade silently.
 		return nil, fmt.Errorf("RUNNER_MAX_LIFETIME must be a positive duration, got %s", c.RunnerMaxLifetime)
+	}
+
+	if c.RunnerNamePrefix == "" {
+		// Empty prefix would let the orphan sweep target literally any
+		// container on the host (substring match returns everything).
+		// Refuse rather than nuke unrelated containers.
+		return nil, errors.New("RUNNER_NAME_PREFIX must be non-empty")
 	}
 
 	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {

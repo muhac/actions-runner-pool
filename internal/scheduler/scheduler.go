@@ -63,7 +63,7 @@ func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *
 		// few seconds. 1 minute gives plenty of room for the install
 		// event to arrive while still bounding the replay loop.
 		noInstallationCancelAge: 1 * time.Minute,
-		nameFn:                  defaultNameFn,
+		nameFn:                  newNameFn(cfg.RunnerNamePrefix),
 		nowFn:                   time.Now,
 	}
 }
@@ -313,13 +313,22 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 }
 
 func defaultNameFn(jobID int64) (string, string) {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		name := fmt.Sprintf("gharp-%d-%d", jobID, time.Now().UnixNano())
+	return newNameFn("gharp-")(jobID)
+}
+
+// newNameFn returns a name generator that yields prefix+jobID+hex.
+// Used by both production wiring (cfg.RunnerNamePrefix) and tests
+// that want a stable namespace.
+func newNameFn(prefix string) func(jobID int64) (string, string) {
+	return func(jobID int64) (string, string) {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			name := fmt.Sprintf("%s%d-%d", prefix, jobID, time.Now().UnixNano())
+			return name, name
+		}
+		name := fmt.Sprintf("%s%d-%s", prefix, jobID, hex.EncodeToString(b[:]))
 		return name, name
 	}
-	name := fmt.Sprintf("gharp-%d-%s", jobID, hex.EncodeToString(b[:]))
-	return name, name
 }
 
 // confirm404 re-reads the workflow job after a short delay. Returns:

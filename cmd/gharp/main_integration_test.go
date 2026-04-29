@@ -54,6 +54,14 @@ func startBinary(t *testing.T) (baseURL, dbPath string) {
 		"BASE_URL=http://127.0.0.1:"+port,
 		"STORE_DSN=file:"+dbPath,
 		"LOG_LEVEL=warn",
+		// Isolate the reconciler's orphan sweep to a per-test
+		// namespace. Without this, the binary's reconciler would
+		// scan the host docker daemon for "gharp-" containers and
+		// happily docker rm -f ANY container on the host with that
+		// prefix — including the self-hosted runner the test itself
+		// is running in. Using a unique prefix keeps the sweep
+		// confined to containers this test would have created.
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

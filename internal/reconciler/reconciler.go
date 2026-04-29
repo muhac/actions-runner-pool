@@ -36,12 +36,14 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-// ContainerNamePrefix gates which containers the orphan sweep is
-// allowed to remove. Must match the name format used by
-// scheduler.defaultNameFn ("gharp-<jobID>-<rand>"). Anything not
-// starting with this prefix is left alone — defense against accidentally
-// nuking unrelated containers if someone reuses the docker socket.
-const ContainerNamePrefix = "gharp-"
+// DefaultContainerNamePrefix is the production default for the
+// orphan-sweep namespace. The actual prefix in use is the per-
+// Reconciler `containerNamePrefix` (set from cfg.RunnerNamePrefix at
+// construction time) — anything not starting with that prefix is
+// left alone, so a deployment can run alongside other gharp pools
+// or unrelated containers on the same docker daemon without the
+// reconciler reaching into them.
+const DefaultContainerNamePrefix = "gharp-"
 
 // Docker is the subset of docker CLI behavior the reconciler depends
 // on. Kept as an interface so tests can fake it without spawning real
@@ -79,13 +81,14 @@ type Store interface {
 }
 
 type Reconciler struct {
-	store       Store
-	docker      Docker
-	log         *slog.Logger
-	period      time.Duration
-	grace       time.Duration
-	maxLifetime time.Duration
-	nowFn       func() time.Time
+	store               Store
+	docker              Docker
+	log                 *slog.Logger
+	period              time.Duration
+	grace               time.Duration
+	maxLifetime         time.Duration
+	containerNamePrefix string
+	nowFn               func() time.Time
 }
 
 // New constructs a Reconciler. maxLifetime is the hard upper bound on
@@ -93,22 +96,28 @@ type Reconciler struct {
 // force-removes the container and marks the row finished — defends
 // against EPHEMERAL runners that registered but never claimed a job
 // (no in_progress webhook ever arrives, the cap slot is held forever
-// otherwise).
-func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration) *Reconciler {
+// otherwise). containerNamePrefix scopes the orphan sweep so it only
+// touches containers this deployment owns; pass "" to fall back to
+// DefaultContainerNamePrefix.
+func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix string) *Reconciler {
+	if containerNamePrefix == "" {
+		containerNamePrefix = DefaultContainerNamePrefix
+	}
 	return &Reconciler{
-		store:       st,
-		docker:      dk,
-		log:         log,
-		period:      60 * time.Second,
+		store:  st,
+		docker: dk,
+		log:    log,
+		period: 60 * time.Second,
 		// Orphan grace: protect very new containers from sweep during
 		// short-lived docker-vs-DB visibility skew. InsertRunner
 		// commits on the writer connection BEFORE the launcher's
 		// `docker run` is invoked, but a different reader connection
 		// in the database/sql pool may briefly not see that row. 30s
 		// is well over typical skew.
-		grace:       30 * time.Second,
-		maxLifetime: maxLifetime,
-		nowFn:       time.Now,
+		grace:               30 * time.Second,
+		maxLifetime:         maxLifetime,
+		containerNamePrefix: containerNamePrefix,
+		nowFn:               time.Now,
 	}
 }
 
@@ -225,7 +234,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) (alive map[string]st
 // steady stream of new dispatches would never clean up actual orphans
 // because there was always a young row in the table.
 func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string]struct{}) (removed int) {
-	cs, err := r.docker.ListByPrefix(ctx, ContainerNamePrefix)
+	cs, err := r.docker.ListByPrefix(ctx, r.containerNamePrefix)
 	if err != nil {
 		r.log.Error("reconciler: ListByPrefix failed", "err", err)
 		return 0
@@ -235,7 +244,7 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 	}
 	now := r.nowFn()
 	for _, c := range cs {
-		if !strings.HasPrefix(c.Name, ContainerNamePrefix) {
+		if !strings.HasPrefix(c.Name, r.containerNamePrefix) {
 			continue // belt-and-suspenders; ListByPrefix already filtered
 		}
 		if _, ok := known[c.Name]; ok {
