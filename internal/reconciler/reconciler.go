@@ -76,27 +76,35 @@ type Store interface {
 }
 
 type Reconciler struct {
-	store    Store
-	docker   Docker
-	log      *slog.Logger
-	period   time.Duration
-	grace    time.Duration
-	nowFn    func() time.Time
+	store       Store
+	docker      Docker
+	log         *slog.Logger
+	period      time.Duration
+	grace       time.Duration
+	maxLifetime time.Duration
+	nowFn       func() time.Time
 }
 
-func New(st Store, dk Docker, log *slog.Logger) *Reconciler {
+// New constructs a Reconciler. maxLifetime is the hard upper bound on
+// how long a runner row can sit in the active set before the loop
+// force-removes the container and marks the row finished — defends
+// against EPHEMERAL runners that registered but never claimed a job
+// (no in_progress webhook ever arrives, the cap slot is held forever
+// otherwise).
+func New(st Store, dk Docker, log *slog.Logger, maxLifetime time.Duration) *Reconciler {
 	return &Reconciler{
-		store:  st,
-		docker: dk,
-		log:    log,
-		period: 60 * time.Second,
+		store:       st,
+		docker:      dk,
+		log:         log,
+		period:      60 * time.Second,
 		// Orphan grace: a container can briefly exist before its runner
 		// row is committed (InsertRunner is BEFORE docker run, but the
 		// docker daemon may surface the container in `ps` slightly
 		// before the InsertRunner txn becomes visible to a separate
 		// reader connection). 30s comfortably covers that.
-		grace: 30 * time.Second,
-		nowFn: time.Now,
+		grace:       30 * time.Second,
+		maxLifetime: maxLifetime,
+		nowFn:       time.Now,
 	}
 }
 
@@ -126,10 +134,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) {
 	r.sweepOrphanContainers(ctx, known)
 }
 
-// sweepGhostRunners walks ListActiveRunners and marks any row 'finished'
-// whose container `docker inspect` cannot find. Returns the set of
-// container names that ARE still alive — passed to the orphan sweep so
-// it doesn't have to re-inspect them.
+// sweepGhostRunners walks ListActiveRunners and either:
+//   - marks the row 'finished' if `docker inspect` cannot find the
+//     container (the original ghost case — frees the cap slot
+//     immediately), or
+//   - force-removes the container AND marks the row finished if the
+//     row's StartedAt is older than maxLifetime (the timeout case —
+//     defends against EPHEMERAL runners that registered but never
+//     claimed a job).
+//
+// Returns the set of container names left alive, so the orphan sweep
+// doesn't have to re-inspect them.
 func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} {
 	alive := map[string]struct{}{}
 	rows, err := r.store.ListActiveRunners(ctx)
@@ -137,6 +152,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 		r.log.Error("reconciler: ListActiveRunners failed", "err", err)
 		return alive
 	}
+	now := r.nowFn()
 	for _, row := range rows {
 		exists, err := r.docker.Inspect(ctx, row.ContainerName)
 		if err != nil {
@@ -146,18 +162,41 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) map[string]struct{} 
 			alive[row.ContainerName] = struct{}{}
 			continue
 		}
-		if exists {
-			alive[row.ContainerName] = struct{}{}
+		if !exists {
+			// Ghost: container vanished. Free the cap slot. The
+			// dispatched job (if any) is left for scheduler.replay to
+			// rescue after dispatchedReplayAge.
+			if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
+				r.log.Error("reconciler: UpdateRunnerStatus(finished) failed", "container", row.ContainerName, "err", err)
+				continue
+			}
+			r.log.Info("reconciler: ghost runner cleared", "container", row.ContainerName, "runner_name", row.RunnerName, "repo", row.Repo)
 			continue
 		}
-		// Container vanished. Free the cap slot. The dispatched job
-		// (if any) is left for scheduler.replay to rescue after
-		// dispatchedReplayAge.
-		if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
-			r.log.Error("reconciler: UpdateRunnerStatus(finished) failed", "container", row.ContainerName, "err", err)
+		// Container is alive. Lifetime check: a runner that's been
+		// 'starting'/'idle'/'busy' past maxLifetime is force-reaped.
+		// In normal operation an EPHEMERAL container exits well within
+		// the lifetime window, so this path only fires for stuck or
+		// never-claimed runners.
+		age := now.Sub(row.StartedAt)
+		if r.maxLifetime > 0 && age > r.maxLifetime {
+			r.log.Info("reconciler: runner exceeded max lifetime; force-removing",
+				"container", row.ContainerName, "runner_name", row.RunnerName, "repo", row.Repo, "age", age, "max_lifetime", r.maxLifetime)
+			if err := r.docker.ForceRemove(ctx, row.ContainerName); err != nil {
+				// Don't mark finished if we couldn't kill the container —
+				// that would let the cap slot free up while the
+				// container is still really running and could re-claim
+				// jobs we don't know about.
+				r.log.Error("reconciler: ForceRemove (lifetime) failed; leaving row alone", "container", row.ContainerName, "err", err)
+				alive[row.ContainerName] = struct{}{}
+				continue
+			}
+			if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
+				r.log.Error("reconciler: UpdateRunnerStatus(finished) after lifetime reap failed", "container", row.ContainerName, "err", err)
+			}
 			continue
 		}
-		r.log.Info("reconciler: ghost runner cleared", "container", row.ContainerName, "runner_name", row.RunnerName, "repo", row.Repo)
+		alive[row.ContainerName] = struct{}{}
 	}
 	return alive
 }

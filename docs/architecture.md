@@ -251,12 +251,16 @@ A reconciliation loop (background goroutine, 60s interval) ships in `internal/re
 
 ```text
 every 60s:
-    # ghost runner sweep (sources 2, 3, 4 above)
+    # ghost runner / lifetime sweep (sources 2, 3, 4 above)
     for each row in runners where status in ('starting','idle','busy'):
         if docker inspect <container_name> says "no such container":
             UPDATE runners SET status='finished'   # frees the cap slot
         elif docker inspect errored:
             leave alone                             # conservative: don't kill live runners on a flaky daemon
+        elif now - row.started_at > RUNNER_MAX_LIFETIME:   # default 2h
+            docker rm -f <container_name>           # defends against runners that registered but never claimed a job
+            if rm succeeded:
+                UPDATE runners SET status='finished'
         else:
             keep
 
@@ -273,7 +277,7 @@ The dispatched job tied to a cleared runner is left for the scheduler's existing
 
 **Out of scope for this pass** (deferred to later v1.x):
 - GitHub-side ghost runner deregistration (`DELETE /repos/{owner}/{repo}/actions/runners/{id}`). Requires installation-token plumbing into the loop and is mostly a polish item — these registrations expire on their own once the runner is unreachable.
-- Idle-timeout reaping (`(running, registered+idle, age > IDLE_TIMEOUT) -> docker rm -f`). Needs a real GitHub API read per tick and an `IDLE_TIMEOUT` config var. The cap-deadlock case doesn't require it.
+- GitHub-driven idle reaping (querying `GET /repos/{owner}/{repo}/actions/runners` for `online + busy=false + age > IDLE_TIMEOUT`). The local lifetime sweep above is the cheaper substitute: it doesn't distinguish "online idle" from "stuck busy," but it bounds cap-slot occupation either way without burning a GitHub API call per tick. If a future operator needs precise idle detection (e.g. to free slots faster than the lifetime cap allows), this is the seam to fill in.
 - Live cap re-check inside `dispatch` (re-`docker inspect` every active runner before launch). Functionally redundant with the 60s loop and would double the docker call rate.
 
 #### Concurrency cap policy (v1)

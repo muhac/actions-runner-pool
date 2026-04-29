@@ -101,7 +101,7 @@ func (f *fakeDocker) ForceRemove(ctx context.Context, name string) error {
 }
 
 func newRecon(st Store, dk Docker) *Reconciler {
-	r := New(st, dk, quietLog())
+	r := New(st, dk, quietLog(), 1*time.Hour)
 	r.period = 10 * time.Millisecond
 	r.grace = 5 * time.Minute
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
@@ -125,7 +125,8 @@ func TestReconcile_GhostRunner_MarksFinished(t *testing.T) {
 // (1b) Container still exists → row left alone.
 func TestReconcile_LiveRunner_NoChange(t *testing.T) {
 	st := &fakeStore{rows: []*store.Runner{
-		{ContainerName: "gharp-2-bbbb", Status: "busy", StartedAt: time.Unix(1_699_990_000, 0)},
+		// 60s before nowFn — well under the 1h test maxLifetime.
+		{ContainerName: "gharp-2-bbbb", Status: "busy", StartedAt: time.Unix(1_700_000_000-60, 0)},
 	}}
 	dk := &fakeDocker{exists: map[string]bool{"gharp-2-bbbb": true}}
 	r := newRecon(st, dk)
@@ -146,6 +147,61 @@ func TestReconcile_InspectError_DoesNotMarkFinished(t *testing.T) {
 	r.Reconcile(context.Background())
 	if len(st.updates) != 0 {
 		t.Fatalf("expected no updates on inspect error, got %+v", st.updates)
+	}
+}
+
+// (4) Lifetime timeout: container is alive but the row's StartedAt
+// is past maxLifetime → docker rm -f + mark finished. Defends against
+// EPHEMERAL runners that registered but never claimed a job.
+func TestReconcile_LifetimeTimeout_ForceRemovesAndMarksFinished(t *testing.T) {
+	st := &fakeStore{rows: []*store.Runner{
+		// StartedAt 2h before now. With newRecon's 1h maxLifetime,
+		// this row is past the cap.
+		{ContainerName: "gharp-stuck-aaaa", Status: "starting", StartedAt: time.Unix(1_700_000_000-7200, 0)},
+	}}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-stuck-aaaa": true}}
+	r := newRecon(st, dk)
+	r.Reconcile(context.Background())
+	if len(dk.removed) != 1 || dk.removed[0] != "gharp-stuck-aaaa" {
+		t.Fatalf("expected ForceRemove of stuck runner, got %+v", dk.removed)
+	}
+	if len(st.updates) != 1 || st.updates[0] != (update{"gharp-stuck-aaaa", "finished"}) {
+		t.Fatalf("expected finished update after lifetime reap, got %+v", st.updates)
+	}
+}
+
+// (4b) Within lifetime: container alive, row young → no action.
+func TestReconcile_WithinLifetime_NoAction(t *testing.T) {
+	st := &fakeStore{rows: []*store.Runner{
+		// 5 minutes old. Well under 1h.
+		{ContainerName: "gharp-young-bbbb", Status: "busy", StartedAt: time.Unix(1_700_000_000-300, 0)},
+	}}
+	dk := &fakeDocker{exists: map[string]bool{"gharp-young-bbbb": true}}
+	r := newRecon(st, dk)
+	r.Reconcile(context.Background())
+	if len(dk.removed) != 0 {
+		t.Fatalf("young runner removed: %+v", dk.removed)
+	}
+	if len(st.updates) != 0 {
+		t.Fatalf("young runner status updated: %+v", st.updates)
+	}
+}
+
+// (4c) ForceRemove failure path: must NOT mark the row finished while
+// the container could still be running, otherwise the cap slot would
+// free up and a stuck container could double-claim jobs.
+func TestReconcile_LifetimeTimeout_ForceRemoveFailure_KeepsRow(t *testing.T) {
+	st := &fakeStore{rows: []*store.Runner{
+		{ContainerName: "gharp-rmerr-cccc", Status: "starting", StartedAt: time.Unix(1_700_000_000-7200, 0)},
+	}}
+	dk := &fakeDocker{
+		exists:    map[string]bool{"gharp-rmerr-cccc": true},
+		removeErr: errors.New("docker rm: socket eof"),
+	}
+	r := newRecon(st, dk)
+	r.Reconcile(context.Background())
+	if len(st.updates) != 0 {
+		t.Fatalf("row marked finished despite ForceRemove failure: %+v", st.updates)
 	}
 }
 

@@ -64,7 +64,7 @@ func run() error {
 		}
 	}()
 
-	rec := reconciler.New(st, reconciler.NewExecDocker(), log)
+	rec := reconciler.New(st, reconciler.NewExecDocker(), log, cfg.RunnerMaxLifetime)
 	go func() {
 		if err := rec.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("reconciler stopped", "err", err)

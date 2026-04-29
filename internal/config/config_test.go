@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withEnv runs fn with key=val temporarily set; cleared after.
@@ -38,7 +39,57 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		if len(c.RunnerCommand) == 0 {
 			t.Errorf("RunnerCommand default empty")
 		}
+		if c.RunnerMaxLifetime != 2*time.Hour {
+			t.Errorf("RunnerMaxLifetime default = %s, want 2h", c.RunnerMaxLifetime)
+		}
 	})
+}
+
+func TestLoad_RunnerMaxLifetime_Custom(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":            "https://example.test",
+		"RUNNER_MAX_LIFETIME": "45m",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.RunnerMaxLifetime != 45*time.Minute {
+			t.Errorf("RunnerMaxLifetime = %s, want 45m", c.RunnerMaxLifetime)
+		}
+	})
+}
+
+func TestLoad_RunnerMaxLifetime_InvalidFallsBack(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":            "https://example.test",
+		"RUNNER_MAX_LIFETIME": "not-a-duration",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.RunnerMaxLifetime != 2*time.Hour {
+			t.Errorf("invalid duration should fall back to 2h, got %s", c.RunnerMaxLifetime)
+		}
+	})
+}
+
+// Negative or zero must fail at startup so an operator doesn't end up
+// with the cap-deadlock failure mode they were trying to fix.
+func TestLoad_RunnerMaxLifetime_NonPositiveRejected(t *testing.T) {
+	for _, in := range []string{"0s", "-1m"} {
+		t.Run(in, func(t *testing.T) {
+			withEnv(t, map[string]string{
+				"BASE_URL":            "https://example.test",
+				"RUNNER_MAX_LIFETIME": in,
+			}, func() {
+				if _, err := Load(); err == nil {
+					t.Fatalf("expected error for RUNNER_MAX_LIFETIME=%q", in)
+				}
+			})
+		})
+	}
 }
 
 func TestLoad_BaseURLRequired(t *testing.T) {
