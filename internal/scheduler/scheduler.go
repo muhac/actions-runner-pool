@@ -335,10 +335,22 @@ func defaultNameFn(jobID int64) (string, string) {
 //     orphan sweep only catches after the grace window.
 func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) (confirmed, aborted bool) {
 	if delay > 0 {
+		// NewTimer + Stop, not time.After: under load the latter
+		// leaves the timer dangling for `delay` whenever ctx wins the
+		// select, which adds avoidable timer churn.
+		t := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !t.Stop() {
+				// Drain the channel if the timer already fired so a
+				// late receiver doesn't see a stale tick.
+				select {
+				case <-t.C:
+				default:
+				}
+			}
 			return false, true
-		case <-time.After(delay):
+		case <-t.C:
 		}
 	}
 	if ctx.Err() != nil {
