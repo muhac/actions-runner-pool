@@ -202,7 +202,7 @@ func TestIntegration_WorkflowJobQueued_InsertsJob(t *testing.T) {
 			"id":     1234567,
 			"labels": []string{"self-hosted"},
 		},
-		"repository":   map[string]any{"full_name": "alice/repo"},
+		"repository":   map[string]any{"full_name": "alice/repo", "private": true},
 		"installation": map[string]any{"id": 99},
 	})
 	resp = postEvent(t, baseURL, "workflow_job", jobBody)
