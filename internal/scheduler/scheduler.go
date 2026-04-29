@@ -233,7 +233,16 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		// replay. conclusion="cancelled" matches the shape of a
 		// webhook-driven cancellation.
 		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
-		if !confirm404(ctx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay) {
+		confirmed, aborted := confirm404(ctx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
+		if aborted {
+			// ctx cancelled mid-confirm — process is shutting down.
+			// Returning here avoids InsertRunner+Launch with a dying
+			// ctx, which would leave a half-created orphan that the
+			// orphan sweep only catches after the grace window.
+			s.log.Info("dispatch: 404 confirm aborted by ctx cancellation; abandoning launch", "job_id", jobID)
+			return
+		}
+		if !confirmed {
 			s.log.Info("dispatch: 404 not confirmed on retry; proceeding optimistically", "job_id", jobID)
 			break
 		}
@@ -309,26 +318,37 @@ func defaultNameFn(jobID int64) (string, string) {
 	return name, name
 }
 
-// confirm404 re-reads the workflow job after a short delay. Returns
-// true if the second read also surfaces NotFound OR AuthFailed —
-// protecting against a single transient 404 (CDN edge propagation,
-// brief GitHub outage) wrongly cancelling a real queued job, but
-// also catching the most common cause of a real 404: the App being
-// uninstalled mid-dispatch, after which the same install token will
-// produce 401/403 and we should still treat the job as terminal
-// rather than launching a runner for it. Any other outcome (back to
-// queued, or a transport error, or ctx cancellation) returns false.
-func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) bool {
+// confirm404 re-reads the workflow job after a short delay. Returns:
+//   - confirmed=true if the second read also surfaces NotFound or
+//     AuthFailed (cancel the job).
+//   - confirmed=false, aborted=false: any other outcome — back to
+//     queued or transport error — fall through to the optimistic
+//     launch path.
+//   - confirmed=false, aborted=true: the context was cancelled (the
+//     parent process is shutting down). The caller must NOT proceed
+//     to InsertRunner/Launch, otherwise we'd kick off a docker run
+//     against a dying ctx and leave a half-created orphan that the
+//     orphan sweep only catches after the grace window.
+func confirm404(ctx context.Context, gh GitHubClient, instTok, repo string, jobID int64, delay time.Duration) (confirmed, aborted bool) {
 	if delay > 0 {
 		select {
 		case <-ctx.Done():
-			return false
+			return false, true
 		case <-time.After(delay):
 		}
 	}
+	if ctx.Err() != nil {
+		return false, true
+	}
 	live, err := gh.WorkflowJob(ctx, instTok, repo, jobID)
 	if err != nil {
-		return false
+		// Check ctx specifically — Go's HTTP client wraps ctx
+		// cancellation in the returned error and we want to
+		// distinguish that from a real transport flake.
+		if ctx.Err() != nil {
+			return false, true
+		}
+		return false, false
 	}
-	return live.NotFound || live.AuthFailed
+	return live.NotFound || live.AuthFailed, false
 }

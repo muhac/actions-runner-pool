@@ -977,6 +977,38 @@ func TestDispatch_PreLaunch_GitHub404_AuthFailedOnConfirm_Cancels(t *testing.T) 
 	}
 }
 
+// ctx cancelled while waiting on the 404-confirm sleep → dispatch
+// must abandon, NOT fall through to InsertRunner/Launch with a dying
+// ctx (which would leave a half-created orphan visible to the orphan
+// sweep only after the grace window).
+func TestDispatch_PreLaunch_GitHub404_CtxCancel_AbandonsLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{NotFound: true}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	// Force a real, non-zero confirm delay so the select hits ctx.Done.
+	s.notFoundConfirmDelay = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	s.dispatch(ctx, 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked after ctx cancel: calls=%d", ln.calls.Load())
+	}
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status == "completed" {
+		t.Fatalf("job wrongly cancelled on ctx-aborted confirm: %+v", job)
+	}
+}
+
 // API hiccup must NOT block dispatch — refusing on transient failures
 // would create a worse failure mode where real jobs never run. The
 // reconciler + replay catch any wasted launch.

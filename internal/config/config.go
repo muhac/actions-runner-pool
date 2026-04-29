@@ -19,6 +19,10 @@ type Config struct {
 	RunnerImage          string
 	RunnerCommand        []string
 	RunnerLabels         []string
+	// runnerLabelSet is the precomputed lower-cased + trimmed set of
+	// RunnerLabels — used by webhook label admission on the hot path.
+	// Built once at Load so we don't reallocate + restring per webhook.
+	RunnerLabelSet       map[string]struct{}
 	MaxConcurrentRunners int
 	// RunnerMaxLifetime caps how long a runner row can stay in the
 	// active set before the reconciler force-removes its container and
@@ -94,6 +98,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RUNNER_COMMAND: %w", err)
 	}
 	c.RunnerCommand = cmd
+
+	c.RunnerLabelSet = make(map[string]struct{}, len(c.RunnerLabels))
+	for _, l := range c.RunnerLabels {
+		c.RunnerLabelSet[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+	}
 
 	joined := strings.Join(c.RunnerCommand, " ")
 	for _, p := range requiredPlaceholders {

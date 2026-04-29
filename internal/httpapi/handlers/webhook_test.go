@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -29,8 +30,14 @@ func (s *spyEnqueuer) Enqueue(jobID int64) {
 
 func newWebhookHandler(t *testing.T, st store.Store, sch *spyEnqueuer, runnerLabels []string) *WebhookHandler {
 	t.Helper()
+	// Mirror what config.Load does: precompute the lower-cased label
+	// set so the handler reads RunnerLabelSet, not RunnerLabels.
+	set := make(map[string]struct{}, len(runnerLabels))
+	for _, l := range runnerLabels {
+		set[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+	}
 	return &WebhookHandler{
-		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: runnerLabels},
+		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: runnerLabels, RunnerLabelSet: set},
 		Store:     st,
 		Scheduler: sch,
 	}
@@ -407,6 +414,13 @@ func TestWebhook_EmptySecret_RejectsSignature(t *testing.T) {
 // satisfiable. Empty configured = serve everything (legacy behavior
 // for operators who haven't set RUNNER_LABELS).
 func TestLabelsMatch_SupersetSemantics(t *testing.T) {
+	makeSet := func(labels []string) map[string]struct{} {
+		out := make(map[string]struct{}, len(labels))
+		for _, l := range labels {
+			out[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+		}
+		return out
+	}
 	cases := []struct {
 		name       string
 		runsOn     []string
@@ -426,7 +440,7 @@ func TestLabelsMatch_SupersetSemantics(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := labelsMatch(tc.runsOn, tc.configured); got != tc.want {
+			if got := labelsMatch(tc.runsOn, makeSet(tc.configured)); got != tc.want {
 				t.Fatalf("labelsMatch(%v, %v) = %v, want %v", tc.runsOn, tc.configured, got, tc.want)
 			}
 		})
