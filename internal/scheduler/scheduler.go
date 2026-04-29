@@ -312,10 +312,6 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
 }
 
-func defaultNameFn(jobID int64) (string, string) {
-	return newNameFn("gharp-")(jobID)
-}
-
 // newNameFn returns a name generator that yields prefix+jobID+hex.
 // Used by both production wiring (cfg.RunnerNamePrefix) and tests
 // that want a stable namespace.
