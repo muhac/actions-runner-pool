@@ -27,6 +27,7 @@ type fakeStore struct {
 	removedRepoInstallation  []string
 	insertedJobs             []*store.Job
 	markJobInProgressNoOp    bool // when true, MarkJobInProgress reports advanced=false
+	markJobCompletedNoOp     bool // when true, MarkJobCompleted reports completed=false
 	insertJobErr             error
 	markedInProgress         []markedInProgress
 	markedCompleted          []markedCompleted
@@ -110,9 +111,12 @@ func (f *fakeStore) MarkJobInProgress(_ context.Context, jobID, runnerID int64, 
 	return true, nil
 }
 
-func (f *fakeStore) MarkJobCompleted(_ context.Context, jobID int64, conclusion string) error {
+func (f *fakeStore) MarkJobCompleted(_ context.Context, jobID int64, conclusion string) (bool, error) {
 	f.markedCompleted = append(f.markedCompleted, markedCompleted{jobID, conclusion})
-	return nil
+	if f.markJobCompletedNoOp {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (f *fakeStore) CancelPendingJobsForRepo(_ context.Context, repo string) (int64, error) {

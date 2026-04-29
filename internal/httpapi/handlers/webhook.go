@@ -299,10 +299,11 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusOK)
 
 	case "completed":
-		if err := h.Store.MarkJobCompleted(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.Conclusion); err != nil {
+		completed, err := h.Store.MarkJobCompleted(r.Context(), ev.WorkflowJob.ID, ev.WorkflowJob.Conclusion)
+		if err != nil {
 			h.logError("mark job completed", err)
 		}
-		if ev.WorkflowJob.RunnerName != "" {
+		if completed && ev.WorkflowJob.RunnerName != "" {
 			if err := h.Store.UpdateRunnerStatusByName(r.Context(), ev.WorkflowJob.RunnerName, "finished"); err != nil {
 				h.logError("update runner status finished", err)
 			}
@@ -315,7 +316,7 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *WebhookHandler) publicRepoAllowed(repo scheduler.Repository) bool {
-	if repo.Private {
+	if !repoIsPublic(repo) {
 		return true
 	}
 	if h.Cfg != nil && h.Cfg.AllowPublicRepos {
@@ -326,6 +327,16 @@ func (h *WebhookHandler) publicRepoAllowed(repo scheduler.Repository) bool {
 	}
 	_, ok := h.Cfg.RepoAllowlistSet[strings.ToLower(strings.TrimSpace(repo.FullName))]
 	return ok
+}
+
+func repoIsPublic(repo scheduler.Repository) bool {
+	switch strings.ToLower(strings.TrimSpace(repo.Visibility)) {
+	case "public":
+		return true
+	case "private", "internal":
+		return false
+	}
+	return !repo.Private
 }
 
 // labelsMatch returns true if every job runs-on label can be satisfied

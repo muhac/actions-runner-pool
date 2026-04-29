@@ -261,6 +261,28 @@ func TestWebhook_PublicRepo_DefaultDrops(t *testing.T) {
 	}
 }
 
+func TestWebhook_InternalRepo_DefaultProceeds(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/internal", "private": false, "visibility": "internal"},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 1 || st.insertedJobs[0].Repo != "alice/internal" {
+		t.Errorf("InsertJobIfNew not called as expected: %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 1 {
+		t.Errorf("expected Enqueue, got %d", sch.calls.Load())
+	}
+}
+
 func TestWebhook_PublicRepo_AllowPublicReposProceeds(t *testing.T) {
 	body := []byte(`{
 		"action": "queued",
@@ -511,6 +533,28 @@ func TestWebhook_PublicRepo_CompletedStillUpdatesLifecycle(t *testing.T) {
 	}
 	if len(st.updatedRunnerByName) != 1 || st.updatedRunnerByName[0].status != "finished" {
 		t.Errorf("UpdateRunnerStatusByName: %+v", st.updatedRunnerByName)
+	}
+}
+
+func TestWebhook_PublicRepo_CompletedMissingJobDoesNotTouchRunner(t *testing.T) {
+	body := []byte(`{
+		"action": "completed",
+		"workflow_job": {"id": 12345, "conclusion": "success", "runner_name": "runner-A", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	st.markJobCompletedNoOp = true
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedCompleted) != 1 {
+		t.Errorf("MarkJobCompleted should be called once: %+v", st.markedCompleted)
+	}
+	if len(st.updatedRunnerByName) != 0 {
+		t.Errorf("runner status must NOT be touched for missing job: %+v", st.updatedRunnerByName)
 	}
 }
 

@@ -21,10 +21,11 @@ type WorkflowJob struct {
 }
 
 type Repository struct {
-	ID       int64  `json:"id"`
-	FullName string `json:"full_name"`
-	HTMLURL  string `json:"html_url"`
-	Private  bool   `json:"private"`
+	ID         int64  `json:"id"`
+	FullName   string `json:"full_name"`
+	HTMLURL    string `json:"html_url"`
+	Private    bool   `json:"private"`
+	Visibility string `json:"visibility"`
 }
 
 type Installation struct {
