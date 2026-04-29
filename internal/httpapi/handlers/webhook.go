@@ -231,6 +231,18 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 
 	switch ev.Action {
 	case "queued":
+		if !h.publicRepoAllowed(ev.Repository) {
+			if h.Log != nil {
+				h.Log.Warn("webhook: public repo dropped",
+					"repo", ev.Repository.FullName,
+					"job_id", ev.WorkflowJob.ID,
+					"action", ev.Action,
+				)
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		// Lazy-write the repo->installation mapping in case we missed
 		// the installation event (resilience).
 		if ev.Installation.ID != 0 && ev.Repository.FullName != "" {
@@ -300,6 +312,20 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+func (h *WebhookHandler) publicRepoAllowed(repo scheduler.Repository) bool {
+	if repo.Private {
+		return true
+	}
+	if h.Cfg != nil && h.Cfg.AllowPublicRepos {
+		return true
+	}
+	if h.Cfg == nil || len(h.Cfg.RepoAllowlistSet) == 0 {
+		return false
+	}
+	_, ok := h.Cfg.RepoAllowlistSet[strings.ToLower(strings.TrimSpace(repo.FullName))]
+	return ok
 }
 
 // labelsMatch returns true if every job runs-on label can be satisfied

@@ -13,23 +13,28 @@ import (
 )
 
 type Config struct {
-	Port                 string
-	BaseURL              string
-	StoreDSN             string
-	RunnerImage          string
+	Port        string
+	BaseURL     string
+	StoreDSN    string
+	RunnerImage string
 	// RunnerNamePrefix scopes both the container/runner names the
 	// scheduler generates AND the orphan sweep the reconciler
 	// performs. Default "gharp-". Override to isolate a deployment
 	// from sibling deployments sharing the same docker daemon (e.g.
 	// integration tests setting a unique per-run prefix so the
 	// reconciler doesn't reach into other deployments' containers).
-	RunnerNamePrefix     string
-	RunnerCommand        []string
-	RunnerLabels         []string
+	RunnerNamePrefix string
+	RunnerCommand    []string
+	RunnerLabels     []string
 	// runnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
-	RunnerLabelSet       map[string]struct{}
+	RunnerLabelSet   map[string]struct{}
+	AllowPublicRepos bool
+	RepoAllowlist    []string
+	// RepoAllowlistSet is the precomputed lower-cased + trimmed set of
+	// public repositories allowed even when AllowPublicRepos is false.
+	RepoAllowlistSet     map[string]struct{}
 	MaxConcurrentRunners int
 	// RunnerMaxLifetime caps how long a runner row can stay in the
 	// active set before the reconciler force-removes its container and
@@ -37,10 +42,10 @@ type Config struct {
 	// register but never get assigned a job — without this they hold a
 	// cap slot until the user notices.
 	RunnerMaxLifetime time.Duration
-	DockerHost           string
-	GitHubAPIBase        string
-	GitHubWebBase        string
-	LogLevel             slog.Level
+	DockerHost        string
+	GitHubAPIBase     string
+	GitHubWebBase     string
+	LogLevel          slog.Level
 }
 
 var defaultRunnerCommand = []string{
@@ -75,6 +80,8 @@ func Load() (*Config, error) {
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
 		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),
+		AllowPublicRepos:     envBool("ALLOW_PUBLIC_REPOS"),
+		RepoAllowlist:        parseList(os.Getenv("REPO_ALLOWLIST")),
 		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
 
@@ -118,6 +125,10 @@ func Load() (*Config, error) {
 	for _, l := range c.RunnerLabels {
 		c.RunnerLabelSet[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
 	}
+	c.RepoAllowlistSet = make(map[string]struct{}, len(c.RepoAllowlist))
+	for _, repo := range c.RepoAllowlist {
+		c.RepoAllowlistSet[strings.ToLower(strings.TrimSpace(repo))] = struct{}{}
+	}
 
 	joined := strings.Join(c.RunnerCommand, " ")
 	for _, p := range requiredPlaceholders {
@@ -160,6 +171,10 @@ func envInt(key string, def int) int {
 	return def
 }
 
+func envBool(key string) bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
+}
+
 // envDuration parses a Go time.Duration string ("90m", "2h30m", "10s").
 // Falls back to the default on missing or unparseable values — the
 // caller's positive-duration check at Load time will reject defaults
@@ -179,6 +194,10 @@ func parseLabels(s string) []string {
 	if s == "" {
 		return []string{"self-hosted"}
 	}
+	return parseList(s)
+}
+
+func parseList(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
 		p := strings.TrimSpace(part)
