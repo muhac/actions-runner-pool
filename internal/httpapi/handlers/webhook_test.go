@@ -179,7 +179,7 @@ func TestWebhook_InstallationDeleted_CancelsAndUnmaps(t *testing.T) {
 const queuedJobBody = `{
 	"action": "queued",
 	"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
-	"repository": {"full_name": "alice/repo"},
+	"repository": {"full_name": "alice/repo", "private": true},
 	"installation": {"id": 99}
 }`
 
@@ -236,6 +236,100 @@ func TestWebhook_QueuedStoreError_503AndNoEnqueue(t *testing.T) {
 	}
 }
 
+func TestWebhook_PublicRepo_DefaultDrops(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 0 {
+		t.Errorf("expected no insert, got %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 0 {
+		t.Errorf("expected no Enqueue, got %d", sch.calls.Load())
+	}
+	if len(st.upsertedRepoInstallation) != 0 {
+		t.Errorf("expected no lazy repo upsert, got %+v", st.upsertedRepoInstallation)
+	}
+}
+
+func TestWebhook_PublicRepo_AllowPublicReposProceeds(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	h.Cfg.AllowPublicRepos = true
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 1 || st.insertedJobs[0].Repo != "alice/public" {
+		t.Errorf("InsertJobIfNew not called as expected: %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 1 {
+		t.Errorf("expected Enqueue, got %d", sch.calls.Load())
+	}
+}
+
+func TestWebhook_PublicRepo_AllowlistBypassesGuard(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "Alice/Public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	h.Cfg.RepoAllowlistSet = map[string]struct{}{"alice/public": {}}
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 1 || st.insertedJobs[0].Repo != "Alice/Public" {
+		t.Errorf("InsertJobIfNew not called as expected: %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 1 {
+		t.Errorf("expected Enqueue, got %d", sch.calls.Load())
+	}
+}
+
+func TestWebhook_PublicRepo_AllowlistMismatchDrops(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, nil)
+	h.Cfg.RepoAllowlistSet = map[string]struct{}{"alice/other": {}}
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 0 {
+		t.Errorf("expected no insert, got %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 0 {
+		t.Errorf("expected no Enqueue, got %d", sch.calls.Load())
+	}
+}
+
 // Pool advertises [linux] but a job requires [self-hosted, gpu] →
 // must be rejected because gpu is not satisfiable. Pre-superset, this
 // also failed (no overlap). Post-superset, the rejection mechanism
@@ -244,7 +338,7 @@ func TestWebhook_LabelFilter_DropsNonMatching(t *testing.T) {
 	body := []byte(`{
 		"action": "queued",
 		"workflow_job": {"id": 12346, "labels": ["self-hosted", "gpu"]},
-		"repository": {"full_name": "alice/repo"},
+		"repository": {"full_name": "alice/repo", "private": true},
 		"installation": {"id": 99}
 	}`)
 	st := storeWithSecret(testWebhookSecret)
@@ -280,7 +374,7 @@ func TestWebhook_InProgress_BindsRunnerAndMarksBusy(t *testing.T) {
 	body := []byte(`{
 		"action": "in_progress",
 		"workflow_job": {"id": 12345, "runner_id": 77, "runner_name": "runner-A", "labels": ["self-hosted"]},
-		"repository": {"full_name": "alice/repo"},
+		"repository": {"full_name": "alice/repo", "private": true},
 		"installation": {"id": 99}
 	}`)
 	st := storeWithSecret(testWebhookSecret)
@@ -303,6 +397,29 @@ func TestWebhook_InProgress_BindsRunnerAndMarksBusy(t *testing.T) {
 	}
 }
 
+func TestWebhook_PublicRepo_InProgressStillUpdatesLifecycle(t *testing.T) {
+	body := []byte(`{
+		"action": "in_progress",
+		"workflow_job": {"id": 12345, "runner_id": 77, "runner_name": "runner-A", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedInProgress) != 1 ||
+		st.markedInProgress[0].jobID != 12345 ||
+		st.markedInProgress[0].runnerName != "runner-A" {
+		t.Errorf("MarkJobInProgress: %+v", st.markedInProgress)
+	}
+	if len(st.updatedRunnerByName) != 1 || st.updatedRunnerByName[0].status != "busy" {
+		t.Errorf("UpdateRunnerStatusByName: %+v", st.updatedRunnerByName)
+	}
+}
+
 func TestWebhook_InProgress_EmptyRunnerName_Skipped(t *testing.T) {
 	// Observed in production: GitHub fires in_progress with runner_id=0
 	// and runner_name="" when our gharp-launched runner lost the race
@@ -312,7 +429,7 @@ func TestWebhook_InProgress_EmptyRunnerName_Skipped(t *testing.T) {
 	body := []byte(`{
 		"action": "in_progress",
 		"workflow_job": {"id": 12345, "runner_id": 0, "runner_name": "", "labels": ["self-hosted"]},
-		"repository": {"full_name": "alice/repo"},
+		"repository": {"full_name": "alice/repo", "private": true},
 		"installation": {"id": 99}
 	}`)
 	st := storeWithSecret(testWebhookSecret)
@@ -337,7 +454,7 @@ func TestWebhook_InProgress_NoOpWhenAlreadyAdvanced_DoesNotTouchRunner(t *testin
 	body := []byte(`{
 		"action": "in_progress",
 		"workflow_job": {"id": 12345, "runner_id": 77, "runner_name": "runner-A", "labels": ["self-hosted"]},
-		"repository": {"full_name": "alice/repo"},
+		"repository": {"full_name": "alice/repo", "private": true},
 		"installation": {"id": 99}
 	}`)
 	st := storeWithSecret(testWebhookSecret)
@@ -359,7 +476,28 @@ func TestWebhook_Completed_RecordsConclusion(t *testing.T) {
 	body := []byte(`{
 		"action": "completed",
 		"workflow_job": {"id": 12345, "conclusion": "success", "runner_name": "runner-A", "labels": ["self-hosted"]},
-		"repository": {"full_name": "alice/repo"},
+		"repository": {"full_name": "alice/repo", "private": true},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	h := newWebhookHandler(t, st, &spyEnqueuer{}, nil)
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.markedCompleted) != 1 || st.markedCompleted[0].conclusion != "success" {
+		t.Errorf("MarkJobCompleted: %+v", st.markedCompleted)
+	}
+	if len(st.updatedRunnerByName) != 1 || st.updatedRunnerByName[0].status != "finished" {
+		t.Errorf("UpdateRunnerStatusByName: %+v", st.updatedRunnerByName)
+	}
+}
+
+func TestWebhook_PublicRepo_CompletedStillUpdatesLifecycle(t *testing.T) {
+	body := []byte(`{
+		"action": "completed",
+		"workflow_job": {"id": 12345, "conclusion": "success", "runner_name": "runner-A", "labels": ["self-hosted"]},
+		"repository": {"full_name": "alice/public", "private": false},
 		"installation": {"id": 99}
 	}`)
 	st := storeWithSecret(testWebhookSecret)

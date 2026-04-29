@@ -18,7 +18,9 @@ For the full env-variable reference, see [configuration.md](configuration.md).
 > ⚠️ **Untrusted code**: gharp runs CI jobs from any repo where the App
 > is installed, in containers that share the host Docker socket. Run
 > only on a dedicated VM, cloud instance, or homelab node — not on a
-> machine that holds secrets you wouldn't paste into a workflow.
+> machine that holds secrets you wouldn't paste into a workflow. Public
+> repos are blocked by default; prefer `REPO_ALLOWLIST=owner/repo` over
+> `ALLOW_PUBLIC_REPOS=true` when you need to allow selected public repos.
 
 ## 1. Get the code (or skip — use the published image)
 
@@ -125,7 +127,7 @@ For the underlying flow and the security caveats, see
 [`architecture.md` § 5](architecture.md).
 
 You're done. From this point, every `workflow_job` whose `runs-on` set
-intersects `RUNNER_LABELS` will get a fresh runner.
+is satisfiable from `RUNNER_LABELS` will get a fresh runner.
 
 ## 5. Verify end-to-end
 
@@ -198,6 +200,10 @@ change any of them, delete the App on GitHub, wipe the gharp volume
 - **Runners start but never pick up the job.** Check `RUNNER_LABELS` —
   a job is accepted only if every label in its `runs-on` set is
   satisfiable from `RUNNER_LABELS` (or is the implicit `self-hosted`).
+- **Public repo jobs are ignored.** This is the default safety guard.
+  Set `REPO_ALLOWLIST=owner/repo` for selected public repos, or
+  `ALLOW_PUBLIC_REPOS=true` to allow all public repos where the App is
+  installed.
 - **`BASE_URL drift` warning at startup.** Your `BASE_URL` env differs
   from the URL stored in `app_config`. Either revert the env or re-run
   `/setup`. See `configuration.md`.

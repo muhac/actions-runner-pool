@@ -180,7 +180,7 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 			"id":     jobID,
 			"labels": []string{"self-hosted"},
 		},
-		"repository":   map[string]any{"full_name": "alice/repo"},
+		"repository":   map[string]any{"full_name": "alice/repo", "private": true},
 		"installation": map[string]any{"id": 99},
 	})
 	resp = postEvent(t, baseURL, "workflow_job", jobBody)
@@ -504,7 +504,7 @@ func queueJob(t *testing.T, baseURL string, jobID, instID int64, repo string) {
 			"id":     jobID,
 			"labels": []string{"self-hosted"},
 		},
-		"repository":   map[string]any{"full_name": repo},
+		"repository":   map[string]any{"full_name": repo, "private": true},
 		"installation": map[string]any{"id": instID},
 	})
 	resp := postEvent(t, baseURL, "workflow_job", body)
@@ -603,7 +603,7 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 	if err := st.InsertRunner(context.Background(), &store.Runner{
 		ContainerName: containerName, Repo: "owner/repo",
 		RunnerName: containerName, Labels: "self-hosted", Status: "starting",
-		StartedAt:  time.Now(),
+		StartedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -782,4 +782,3 @@ func TestIntegration_LazyInstallationRecovers_AfterFollowupEvent(t *testing.T) {
 		t.Errorf("installation_repos.installation_id=%d, want 88", instID)
 	}
 }
-

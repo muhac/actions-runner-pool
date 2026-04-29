@@ -167,7 +167,7 @@ sequenceDiagram
 
   GH->>WH: 1) POST /github/webhook (workflow_job queued)
     Note over WH: 2) Verify HMAC over raw body (constant-time compare)
-  Note over WH: 3) Parse payload and filter queued jobs with matching labels
+  Note over WH: 3) Parse payload and apply public-repo + label admission filters
   Note over WH: 4) Insert job row with dedupe on job id
   Note over WH: 5) Push job id to channel when possible
   WH-->>GH: 200 OK (target: under ~3s typical, under 10s hard)
@@ -207,7 +207,7 @@ sequenceDiagram
 - **Registration tokens are single-use under `EPHEMERAL=1`.** Don't try to cache them. Mint one per `docker run`.
 - **Installation tokens can be cached per installation for ~55 minutes** (1h TTL minus a safety margin). The `internal/github` client should hold a small in-memory cache keyed by installation_id.
 - **Concurrency cap is enforced before minting tokens**, not after — otherwise we waste GitHub API budget on jobs we're about to refuse.
-- **Filter early on labels.** If the workflow's `runs-on` labels don't intersect our configured runner labels, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
+- **Filter early on public repos and labels.** Queued public-repo jobs are dropped by default unless `ALLOW_PUBLIC_REPOS=true` or the repo appears in `REPO_ALLOWLIST`. Lifecycle events still update already-admitted jobs. If the workflow's `runs-on` labels are not satisfiable from configured runner labels, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
 
 #### What we deliberately don't do
 
@@ -550,17 +550,16 @@ Concrete v1.x work, ordered by impact on correctness:
 7. **Ops endpoints / dashboard.** `/healthz` exists; add `/metrics`,
    `/jobs?status=...`, an admin force-rerun, and eventually a small
    dashboard beyond the one-shot `/setup` page.
-8. **Public-repo guard.** The `workflow_job` payload's
-   `repository.private` already exposes the bit; we just don't read
-   it. Default behavior should be: drop events from public repos with
-   a warning, since self-hosted runners on public repos = remote code
-   execution by any contributor (see README §3 warning). Opt-out via
-   `ALLOW_PUBLIC_REPOS=true` for users who explicitly trust the repo.
-9. **Per-repo allowlist.** A `REPO_ALLOWLIST` env (comma-separated
-   `owner/name`) so operators can scope a single installation to a
-   subset of the repos GitHub granted. Today the only knob is
-   "uninstall on the unwanted repo from the GitHub UI", which is a
-   round-trip for every change.
+8. **Public-repo guard.** **Shipped:** queued `workflow_job` payloads
+   with `repository.private=false` are dropped by default with a
+   warning, since self-hosted runners on public repos = remote code
+   execution by any contributor. Lifecycle events are still processed
+   for already-admitted jobs. Operators can opt out globally with
+   `ALLOW_PUBLIC_REPOS=true`.
+9. **Public repo allowlist.** **Shipped:** `REPO_ALLOWLIST` is a
+   comma-separated exact `owner/name` bypass list for selected public
+   repos. Private repo access remains controlled by the GitHub App
+   installation scope.
 10. **Hardened runner runtime.** The default runner shares the host
     Docker socket and pollutes host state — e.g., `docker buildx`
     leaves `buildx_buildkit_builder-*` containers behind because they
