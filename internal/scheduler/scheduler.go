@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/runner"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
@@ -23,6 +24,11 @@ type GitHubClient interface {
 	AppJWT(pem []byte, appID int64) (string, error)
 	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
 	RegistrationToken(ctx context.Context, installationToken, repoFullName string) (string, error)
+	// WorkflowJob fetches the live job state from GitHub. Used as the
+	// pre-launch correctness check that catches jobs which
+	// completed/cancelled while we were minting tokens (or whose
+	// state-change webhooks were delayed/dropped).
+	WorkflowJob(ctx context.Context, installationToken, repoFullName string, jobID int64) (*github.WorkflowJobStatus, error)
 }
 
 type Scheduler struct {
@@ -168,6 +174,39 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	regTok, err := s.gh.RegistrationToken(ctx, instTok, job.Repo)
 	if err != nil {
 		s.log.Error("dispatch: RegistrationToken failed", "job_id", jobID, "repo", job.Repo, "err", err)
+		return
+	}
+
+	// Pre-launch truth-of-record check against GitHub. The opening
+	// store.GetJob only saw what webhooks had written; the InstallationToken
+	// + RegistrationToken round-trips above can take seconds, during which
+	// the user may have cancelled the workflow or another runner may have
+	// claimed the job. Without this we'd happily launch a container nobody
+	// is ever going to bind to — straight ghost runner that pins a cap slot
+	// until the reconciler clears it.
+	live, err := s.gh.WorkflowJob(ctx, instTok, job.Repo, jobID)
+	if err != nil {
+		// API hiccup: stay conservative and proceed. The 60s reconciler +
+		// dispatchedReplayAge will catch a wasted launch; refusing on
+		// transient GitHub errors would create a worse failure mode where
+		// real jobs never dispatch.
+		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)
+	} else if live.NotFound {
+		// Job was deleted/inaccessible. Mark cancelled so the row stops
+		// participating in replay; conclusion="cancelled" matches the
+		// shape of a webhook-driven cancellation.
+		s.log.Info("dispatch: GitHub returned 404 for job; marking cancelled", "job_id", jobID, "repo", job.Repo)
+		if err := s.store.MarkJobCompleted(ctx, jobID, "cancelled"); err != nil {
+			s.log.Error("dispatch: MarkJobCompleted(cancelled) after 404 failed", "job_id", jobID, "err", err)
+		}
+		return
+	} else if live.Status != "queued" {
+		// Most common case: the job is already in_progress (another runner
+		// won) or completed (cancelled / finished). Either way the launch
+		// is wasted work — abort before InsertRunner so we don't even
+		// create a row to clean up.
+		s.log.Info("dispatch: GitHub reports job no longer queued; aborting launch",
+			"job_id", jobID, "github_status", live.Status, "github_conclusion", live.Conclusion)
 		return
 	}
 

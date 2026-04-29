@@ -183,6 +183,10 @@ sequenceDiagram
     WK->>DK: 11) POST /repos/{owner}/{repo}/actions/runners/registration-token
     DK-->>WK: registration_token (~1h TTL, single-use with EPHEMERAL=1)
 
+    WK->>DK: 11b) GET /repos/{owner}/{repo}/actions/jobs/{job_id} (pre-launch truth check)
+    DK-->>WK: status (queued / in_progress / completed) + conclusion
+    Note over WK: If status != queued or 404 → abort (mark cancelled on 404). Transient API errors → proceed optimistically.
+
     Note over WK: 12) Insert runner row with starting status
     WK->>DK: 13) Start runner container with repo token name labels and ephemeral mode
     Note over DK: Container starts and registers as idle runner

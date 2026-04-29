@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
+	"github.com/muhac/actions-runner-pool/internal/github"
 	"github.com/muhac/actions-runner-pool/internal/runner"
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
@@ -50,9 +51,12 @@ type spyGH struct {
 	jwtCalls    atomic.Int64
 	instCalls   atomic.Int64
 	regCalls    atomic.Int64
+	wfJobCalls  atomic.Int64
 	jwtErr      error
 	instErr     error
 	regErr      error
+	wfJobErr    error
+	wfJobReply  *github.WorkflowJobStatus
 	mu          sync.Mutex
 	callOrder   []string
 }
@@ -96,6 +100,19 @@ func (g *spyGH) RegistrationToken(ctx context.Context, instTok, repo string) (st
 		return "", g.regErr
 	}
 	return "reg-token", nil
+}
+
+func (g *spyGH) WorkflowJob(ctx context.Context, instTok, repo string, jobID int64) (*github.WorkflowJobStatus, error) {
+	g.wfJobCalls.Add(1)
+	g.recordCall("WorkflowJob")
+	if g.wfJobErr != nil {
+		return nil, g.wfJobErr
+	}
+	if g.wfJobReply != nil {
+		return g.wfJobReply, nil
+	}
+	// Default: still queued -> dispatch proceeds.
+	return &github.WorkflowJobStatus{Status: "queued"}, nil
 }
 
 // --- spy launcher ------------------------------------------------------------
@@ -385,11 +402,12 @@ func TestDispatch_TokenOrder_CapBeforeJWT(t *testing.T) {
 		t.Fatalf("expected one of each mint, got jwt=%d inst=%d reg=%d",
 			gh.jwtCalls.Load(), gh.instCalls.Load(), gh.regCalls.Load())
 	}
-	// Order within github calls: AppJWT before InstallationToken before RegistrationToken.
-	want := []string{"AppJWT", "InstallationToken", "RegistrationToken"}
+	// Order within github calls: AppJWT before InstallationToken before
+	// RegistrationToken before the pre-launch WorkflowJob check.
+	want := []string{"AppJWT", "InstallationToken", "RegistrationToken", "WorkflowJob"}
 	order := gh.order()
-	if len(order) != 3 {
-		t.Fatalf("callOrder=%v, want 3 entries", order)
+	if len(order) != len(want) {
+		t.Fatalf("callOrder=%v, want %d entries", order, len(want))
 	}
 	for i := range want {
 		if order[i] != want[i] {
@@ -784,6 +802,103 @@ func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
 	active, _ := st.ListActiveRunners(context.Background())
 	if len(active) != 1 {
 		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// --- pre-launch GitHub WorkflowJob check ------------------------------------
+
+// GitHub reports the job is no longer queued (cancelled / claimed by
+// another runner) -> dispatch must abort BEFORE InsertRunner so we
+// don't even create a row to clean up. This is the central correctness
+// claim of the pre-launch check.
+func TestDispatch_PreLaunch_GitHubNotQueued_AbortsBeforeInsert(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{Status: "completed", Conclusion: "cancelled"}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite cancelled job: calls=%d", ln.calls.Load())
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("InsertRunner ran despite cancelled job: %+v", active)
+	}
+	// The job row stays as-is; the upstream webhook will eventually
+	// transition it. We deliberately don't write anything from this branch.
+	job, _ := st.GetJob(context.Background(), 1)
+	if job.Status != "pending" {
+		t.Fatalf("job status mutated unexpectedly: %q", job.Status)
+	}
+}
+
+// 404 from GitHub means the job is gone for good. Policy: mark it
+// cancelled ourselves so PendingJobs replay doesn't keep retrying.
+func TestDispatch_PreLaunch_GitHub404_MarksCancelled(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{NotFound: true}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite 404: calls=%d", ln.calls.Load())
+	}
+	job, err := st.GetJob(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job after 404 = status=%q conclusion=%q, want completed/cancelled", job.Status, job.Conclusion)
+	}
+}
+
+// API hiccup must NOT block dispatch — refusing on transient failures
+// would create a worse failure mode where real jobs never run. The
+// reconciler + replay catch any wasted launch.
+func TestDispatch_PreLaunch_WorkflowJobError_ProceedsOptimistically(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobErr: errors.New("github 502")}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 1 {
+		t.Fatalf("Launch should still run on transient WorkflowJob error, calls=%d", ln.calls.Load())
+	}
+}
+
+// Status==in_progress is the "another runner won the binding race"
+// branch — same handling as cancelled: abort before InsertRunner.
+func TestDispatch_PreLaunch_GitHubInProgress_AbortsBeforeInsert(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{wfJobReply: &github.WorkflowJobStatus{Status: "in_progress"}}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(4), st, gh, ln)
+	s.dispatch(context.Background(), 1)
+
+	if ln.calls.Load() != 0 {
+		t.Fatalf("Launch invoked despite in_progress: calls=%d", ln.calls.Load())
 	}
 }
 
