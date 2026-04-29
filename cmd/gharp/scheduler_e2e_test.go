@@ -77,6 +77,13 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 				"status":     "queued",
 				"conclusion": nil,
 			})
+		case strings.HasSuffix(r.URL.Path, "/actions/runners"):
+			// Reconciler GitHub-side ghost sweep — empty list.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"total_count": 0,
+				"runners":     []any{},
+			})
 		default:
 			t.Errorf("unexpected GitHub call: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected", http.StatusInternalServerError)
@@ -264,6 +271,11 @@ func TestIntegration_StartupReplay_RecoversPendingJob(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":     "queued",
 				"conclusion": nil,
+			})
+		case strings.HasSuffix(r.URL.Path, "/actions/runners"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"total_count": 0,
+				"runners":     []any{},
 			})
 		default:
 			http.Error(w, "unexpected: "+r.URL.Path, http.StatusInternalServerError)
@@ -544,6 +556,14 @@ func happyGitHubHandler(instHits, regHits *atomic.Int64) http.HandlerFunc {
 				"status":     "queued",
 				"conclusion": nil,
 			})
+		case strings.HasSuffix(r.URL.Path, "/actions/runners"):
+			// Reconciler GitHub-side ghost sweep. Return empty
+			// list so the sweep is a no-op (it would only DELETE
+			// runners not in our active set anyway).
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"total_count": 0,
+				"runners":     []any{},
+			})
 		default:
 			http.Error(w, "unexpected: "+r.URL.Path, http.StatusInternalServerError)
 		}
@@ -678,11 +698,12 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 	if n != 1 {
 		t.Errorf("runners count=%d, want 1 (cap should block launch)", n)
 	}
-	if instHits.Load() != 0 {
-		t.Errorf("installation token mints=%d, want 0 under cap", instHits.Load())
-	}
+	// instHits != 0 is expected — the reconciler's GitHub-side sweep
+	// runs once at startup and mints an install token to list this
+	// repo's runners. What we're really asserting is that the
+	// DISPATCH path didn't mint a registration token under cap.
 	if regHits.Load() != 0 {
-		t.Errorf("registration token mints=%d, want 0 under cap", regHits.Load())
+		t.Errorf("registration token mints=%d, want 0 under cap (dispatch must not run)", regHits.Load())
 	}
 	// Job is still pending in sqlite for the next replay.
 	var status string
