@@ -1,8 +1,11 @@
 package runner
 
 import (
+	"context"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
 )
@@ -17,12 +20,12 @@ func TestRenderArg_AllPlaceholders(t *testing.T) {
 		Image:             "myimage:tag",
 	}
 	cases := map[string]string{
-		"{{.ContainerName}}":           "gharp-abc",
-		"--name={{.ContainerName}}":    "--name=gharp-abc",
-		"REPO_URL={{.RepoURL}}":        "REPO_URL=https://github.com/foo/bar",
+		"{{.ContainerName}}":                  "gharp-abc",
+		"--name={{.ContainerName}}":           "--name=gharp-abc",
+		"REPO_URL={{.RepoURL}}":               "REPO_URL=https://github.com/foo/bar",
 		"RUNNER_TOKEN={{.RegistrationToken}}": "RUNNER_TOKEN=AAAA-token",
-		"{{.Image}}":                   "myimage:tag",
-		"static":                       "static",
+		"{{.Image}}":                          "myimage:tag",
+		"static":                              "static",
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -105,5 +108,53 @@ func TestLauncher_LaunchImageFallback(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "image=default-image:latest") {
 		t.Errorf("image fallback not applied; args = %v", args)
+	}
+}
+
+func TestLauncher_LaunchReturnsEarlyProcessFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command uses Unix sh")
+	}
+	cfg := &config.Config{
+		RunnerImage: "default-image:latest",
+		RunnerCommand: []string{
+			"sh",
+			"-c",
+			"exit 7",
+		},
+	}
+	l := NewLauncher(cfg)
+	l.launchObserveWindow = 500 * time.Millisecond
+
+	err := l.Launch(context.Background(), Spec{})
+	if err == nil {
+		t.Fatal("Launch returned nil, want early process failure")
+	}
+	if !strings.Contains(err.Error(), "runner command exited during launch") {
+		t.Fatalf("Launch error = %v, want launch-exit context", err)
+	}
+}
+
+func TestLauncher_LaunchReturnsForStillRunningProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command uses Unix sh")
+	}
+	cfg := &config.Config{
+		RunnerImage: "default-image:latest",
+		RunnerCommand: []string{
+			"sh",
+			"-c",
+			"sleep 0.2",
+		},
+	}
+	l := NewLauncher(cfg)
+	l.launchObserveWindow = 10 * time.Millisecond
+
+	start := time.Now()
+	if err := l.Launch(context.Background(), Spec{}); err != nil {
+		t.Fatalf("Launch returned error for running process: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("Launch took %s, want return after observe window", elapsed)
 	}
 }

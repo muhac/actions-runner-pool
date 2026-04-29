@@ -6,16 +6,21 @@ import (
 	"fmt"
 	"os/exec"
 	"text/template"
+	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
 )
 
 type Launcher struct {
-	cfg *config.Config
+	cfg                 *config.Config
+	launchObserveWindow time.Duration
 }
 
 func NewLauncher(cfg *config.Config) *Launcher {
-	return &Launcher{cfg: cfg}
+	return &Launcher{
+		cfg:                 cfg,
+		launchObserveWindow: 2 * time.Second,
+	}
 }
 
 // Spec is the data passed into each template element when rendering the
@@ -30,9 +35,10 @@ type Spec struct {
 }
 
 // Launch renders the configured RUNNER_COMMAND template against spec and
-// starts the container. Returns once the docker daemon has acknowledged
-// (Start, not Wait) — container lifecycle is tracked via webhook events
-// and the reconciliation loop, not this call.
+// starts the container. It observes the process briefly so early docker
+// failures after Start (for example daemon/name/pull errors) can be retried;
+// after that, container lifecycle is tracked via webhook events and the
+// reconciliation loop, not this call.
 func (l *Launcher) Launch(ctx context.Context, spec Spec) error {
 	if spec.Image == "" {
 		spec.Image = l.cfg.RunnerImage
@@ -49,10 +55,33 @@ func (l *Launcher) Launch(ctx context.Context, spec Spec) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if err := cmd.Process.Release(); err != nil {
-		return fmt.Errorf("release process for %q: %w", args[0], err)
+	return l.observeLaunch(ctx, cmd)
+}
+
+func (l *Launcher) observeLaunch(ctx context.Context, cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	window := l.launchObserveWindow
+	if window <= 0 {
+		window = 2 * time.Second
 	}
-	return nil
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("runner command exited during launch: %w", err)
+		}
+		return nil
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func renderArg(raw string, spec Spec) (string, error) {
