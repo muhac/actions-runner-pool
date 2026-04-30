@@ -32,6 +32,11 @@ docker run -d --name gharp \
 the container's port 8080 (above mapped to the host's 8080). See
 [`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
 
+> 🔐 **Secure the admin API.** The `/jobs`, `/jobs/{id}/retry`,
+> `/jobs/{id}/cancel`, and `/metrics` endpoints are open by default.
+> Set `-e ADMIN_TOKEN=<secret>` to require
+> `Authorization: Bearer <secret>` on those routes.
+
 ### 2. Create the GitHub App
 
 Open `${BASE_URL}/setup` and click **Create GitHub App**. gharp drives
