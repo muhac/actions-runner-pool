@@ -16,6 +16,8 @@ same.
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port. |
 | `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Applies to jobs and metrics endpoints: `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/retry`, `POST /jobs/{job_id}/cancel`, `GET /metrics`. If set, requests must send `Authorization: Bearer <token>`; if empty/unset, endpoints are open. |
+| `MAINTENANCE_COMMAND` | _(unset)_ | Optional JSON argv (no shell) to run periodically, e.g. `["docker","system","prune","-f","--volumes"]`. Requires `MAINTENANCE_INTERVAL` to be set; if only one is provided, a warning is logged and the feature is disabled. Non-zero exit is logged as a warning but does not crash the service. |
+| `MAINTENANCE_INTERVAL` | _(unset)_ | How often to run `MAINTENANCE_COMMAND`. Parsed via Go's `time.ParseDuration` (`6h`, `24h`, `30m`). Requires `MAINTENANCE_COMMAND`; either missing disables periodic maintenance. |
 | `STORE_DSN` | `file:/data/gharp.db?_pragma=journal_mode(WAL)` (in the published `muhac/gharp` image) ・ `file:gharp.db?_pragma=journal_mode(WAL)` (when running the binary directly) | SQLite DSN. The image sets a default that lands in `/data`, which is declared as a `VOLUME` — mount a host directory or named volume there to survive container restarts. Override if you want the DB elsewhere. |
 | `LOG_LEVEL` | `info` | One of `debug` / `info` / `warn` (alias `warning`) / `error`. Unknown values fall back to `info`. |
 
@@ -66,6 +68,8 @@ for a worked example.
 - `RUNNER_COMMAND` malformed JSON, empty array, or missing required placeholder → startup fails.
 - `ALLOW_PUBLIC_REPOS` only enables on literal `true` (case-insensitive); unset, empty, or any other value is `false`.
 - `ADMIN_TOKEN` is whitespace-trimmed at startup.
+- `MAINTENANCE_COMMAND` malformed JSON or non-array → startup fails. Only one of `MAINTENANCE_COMMAND` / `MAINTENANCE_INTERVAL` set → warning logged, maintenance disabled.
+- `MAINTENANCE_INTERVAL` unparseable → silently uses 0 (disabled).
 - `REPO_ALLOWLIST` empty or unset means no public repo bypasses.
 - `MAX_CONCURRENT_RUNNERS` non-integer → silently uses default. `0` or negative → startup fails (otherwise the cap-exceeded branch would re-enqueue every job forever).
 - `RUNNER_MAX_LIFETIME` unparseable → silently uses default. `0` or negative → startup fails.

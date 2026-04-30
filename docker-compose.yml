@@ -12,6 +12,10 @@ services:
     # line at runtime; .env can't hold multi-line values.
     environment:
       RUNNER_WORKDIR_ROOT: /tmp/gharp
+      # Optional: run a periodic maintenance command (e.g. to prune Docker
+      # storage). Both variables must be set together to enable the feature.
+      # MAINTENANCE_COMMAND: '["docker","system","prune","-f","--volumes"]'
+      # MAINTENANCE_INTERVAL: 6h
       RUNNER_COMMAND: >-
         [
           "docker","run","--rm","-d",
