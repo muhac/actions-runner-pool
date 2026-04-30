@@ -58,6 +58,7 @@ type Store interface {
 	// row was actually retried.
 	RetryJobIfCompleted(ctx context.Context, jobID int64) (retried bool, err error)
 	ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error)
+	Summary(ctx context.Context) (*Summary, error)
 	// PendingJobs returns rows still owed dispatch work — both 'pending'
 	// rows and stale 'dispatched' rows whose runner never claimed a job
 	// (the runner↔job race documented in architecture.md).

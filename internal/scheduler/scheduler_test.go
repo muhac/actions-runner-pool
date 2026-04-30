@@ -1312,6 +1312,7 @@ func (e *errStore) RetryJobIfCompleted(context.Context, int64) (bool, error) {
 func (e *errStore) ListJobs(context.Context, store.JobListFilter) ([]*store.Job, error) {
 	panic("unused")
 }
+func (e *errStore) Summary(context.Context) (*store.Summary, error)   { panic("unused") }
 func (e *errStore) InsertRunner(context.Context, *store.Runner) error { panic("unused") }
 func (e *errStore) UpdateRunnerStatus(context.Context, string, string) error {
 	panic("unused")

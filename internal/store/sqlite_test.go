@@ -579,6 +579,44 @@ func TestListJobs_FilterOrderAndLimit(t *testing.T) {
 	}
 }
 
+func TestSummary_CountsJobsAndRunners(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	for _, j := range []*Job{
+		{ID: 1, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "1", Status: "pending"},
+		{ID: 2, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "2", Status: "pending"},
+		{ID: 3, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "3", Status: "completed"},
+	} {
+		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+			t.Fatalf("insert job %d: %v", j.ID, err)
+		}
+	}
+	for _, r := range []*Runner{
+		{ContainerName: "c1", Repo: "a/b", RunnerName: "r1", Labels: "x", Status: "starting", StartedAt: time.Now()},
+		{ContainerName: "c2", Repo: "a/b", RunnerName: "r2", Labels: "x", Status: "busy", StartedAt: time.Now()},
+		{ContainerName: "c3", Repo: "a/b", RunnerName: "r3", Labels: "x", Status: "finished", StartedAt: time.Now()},
+	} {
+		if err := s.InsertRunner(ctx, r); err != nil {
+			t.Fatalf("insert runner %s: %v", r.ContainerName, err)
+		}
+	}
+
+	got, err := s.Summary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JobsByStatus["pending"] != 2 || got.JobsByStatus["completed"] != 1 {
+		t.Fatalf("jobs by status = %+v", got.JobsByStatus)
+	}
+	if got.RunnersByStatus["starting"] != 1 || got.RunnersByStatus["busy"] != 1 || got.RunnersByStatus["finished"] != 1 {
+		t.Fatalf("runners by status = %+v", got.RunnersByStatus)
+	}
+	if got.ActiveRunners != 2 {
+		t.Fatalf("active runners = %d, want 2", got.ActiveRunners)
+	}
+}
+
 func TestRetryJobIfCompleted(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

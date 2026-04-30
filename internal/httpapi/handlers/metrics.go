@@ -1,0 +1,114 @@
+package handlers
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+
+	"github.com/muhac/actions-runner-pool/internal/config"
+	"github.com/muhac/actions-runner-pool/internal/store"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	metricJobStatuses    = []string{"pending", "dispatched", "in_progress", "completed"}
+	metricRunnerStatuses = []string{"starting", "idle", "busy", "finished"}
+)
+
+type MetricsHandler struct {
+	Cfg   *config.Config
+	Store store.Store
+	Log   *slog.Logger
+
+	handler http.Handler
+}
+
+func NewMetricsHandler(cfg *config.Config, st store.Store, log *slog.Logger) *MetricsHandler {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(&summaryCollector{cfg: cfg, store: st})
+	return &MetricsHandler{
+		Cfg:     cfg,
+		Store:   st,
+		Log:     log,
+		handler: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+	}
+}
+
+func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !authorizedBearer(h.Cfg, r.Header.Get("Authorization")) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	h.handler.ServeHTTP(w, r)
+}
+
+type summaryCollector struct {
+	cfg   *config.Config
+	store store.Store
+}
+
+var (
+	jobsTotalDesc = prometheus.NewDesc(
+		"gharp_jobs_total",
+		"Current number of jobs by status.",
+		[]string{"status"},
+		nil,
+	)
+	runnersTotalDesc = prometheus.NewDesc(
+		"gharp_runners_total",
+		"Current number of runners by status.",
+		[]string{"status"},
+		nil,
+	)
+	activeRunnersDesc = prometheus.NewDesc(
+		"gharp_active_runners",
+		"Current number of active runners.",
+		nil,
+		nil,
+	)
+	maxConcurrentRunnersDesc = prometheus.NewDesc(
+		"gharp_max_concurrent_runners",
+		"Configured maximum number of concurrent runners.",
+		nil,
+		nil,
+	)
+	pendingJobsDesc = prometheus.NewDesc(
+		"gharp_pending_jobs",
+		"Current number of pending jobs.",
+		nil,
+		nil,
+	)
+)
+
+func (c *summaryCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- jobsTotalDesc
+	ch <- runnersTotalDesc
+	ch <- activeRunnersDesc
+	ch <- maxConcurrentRunnersDesc
+	ch <- pendingJobsDesc
+}
+
+func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
+	summary, err := c.store.Summary(context.Background())
+	if err != nil {
+		ch <- prometheus.NewInvalidMetric(jobsTotalDesc, err)
+		return
+	}
+
+	for _, status := range metricJobStatuses {
+		ch <- prometheus.MustNewConstMetric(jobsTotalDesc, prometheus.GaugeValue, float64(summary.JobsByStatus[status]), status)
+	}
+	for _, status := range metricRunnerStatuses {
+		ch <- prometheus.MustNewConstMetric(runnersTotalDesc, prometheus.GaugeValue, float64(summary.RunnersByStatus[status]), status)
+	}
+
+	maxConcurrent := 0
+	if c.cfg != nil {
+		maxConcurrent = c.cfg.MaxConcurrentRunners
+	}
+	ch <- prometheus.MustNewConstMetric(activeRunnersDesc, prometheus.GaugeValue, float64(summary.ActiveRunners))
+	ch <- prometheus.MustNewConstMetric(maxConcurrentRunnersDesc, prometheus.GaugeValue, float64(maxConcurrent))
+	ch <- prometheus.MustNewConstMetric(pendingJobsDesc, prometheus.GaugeValue, float64(summary.JobsByStatus["pending"]))
+}

@@ -409,6 +409,42 @@ func (s *SQLite) ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error) 
 	return out, rows.Err()
 }
 
+func (s *SQLite) Summary(ctx context.Context) (*Summary, error) {
+	jobs, err := countByStatus(ctx, s.db, "jobs")
+	if err != nil {
+		return nil, err
+	}
+	runners, err := countByStatus(ctx, s.db, "runners")
+	if err != nil {
+		return nil, err
+	}
+	active := runners["starting"] + runners["idle"] + runners["busy"]
+	return &Summary{
+		JobsByStatus:    jobs,
+		RunnersByStatus: runners,
+		ActiveRunners:   active,
+	}, nil
+}
+
+func countByStatus(ctx context.Context, db *sql.DB, table string) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM `+table+` GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		out[status] = count
+	}
+	return out, rows.Err()
+}
+
 // ---------------- runners ----------------
 
 func (s *SQLite) InsertRunner(ctx context.Context, r *Runner) error {
