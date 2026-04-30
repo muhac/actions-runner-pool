@@ -224,6 +224,7 @@ change any of them, delete the App on GitHub, wipe the gharp volume
 - `GET /jobs/{job_id}` — returns full job detail, including stored webhook payload.
 - `POST /jobs/{job_id}/retry` — retries a completed job locally (status resets to pending and is enqueued).
 - `POST /jobs/{job_id}/cancel` — cancels a pending/dispatched job locally.
+- `GET /metrics` — returns Prometheus text-format gauges for current job and runner counts.
 
 `/jobs` supports query params:
 
@@ -257,7 +258,17 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://localhost:8080/jobs/123456789/cancel"
+
+# Prometheus metrics
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/metrics"
 ```
+
+`/metrics` exposes low-cardinality current-state gauges:
+`gharp_jobs_total{status}`, `gharp_runners_total{status}`,
+and `gharp_max_concurrent_runners`.
+Use `gharp_jobs_total{status="pending"}` as the canonical pending-jobs signal,
+and `sum(gharp_runners_total{status=~"starting|idle|busy"})` for active runners.
 
 ### Logs
 

@@ -559,9 +559,9 @@ Concrete v1.x work, ordered by impact on correctness:
 6. **Per-installation cap.** Current `MAX_CONCURRENT_RUNNERS` is
    global. Multi-tenant deployments need per-installation quotas to
    stop one repo from monopolizing slots.
-7. **Ops endpoints / dashboard.** `/healthz` exists; add `/metrics`,
-   `/jobs?status=...`, an admin force-rerun, and eventually a small
-   dashboard beyond the one-shot `/setup` page.
+7. **Ops endpoints / dashboard.** `/healthz`, `/metrics`,
+   `/jobs?status=...`, and job retry/cancel controls exist; eventually
+   add a small dashboard beyond the one-shot `/setup` page.
 8. **Public-repo guard.** **Shipped:** queued `workflow_job` payloads
    with `repository.private=false` are dropped by default with a
    warning, since self-hosted runners on public repos = remote code

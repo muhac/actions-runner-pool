@@ -53,4 +53,13 @@ func TestRouter_JobsRoute(t *testing.T) {
 			t.Fatalf("status = %d, want 404", rr.Code)
 		}
 	})
+
+	t.Run("metrics", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rr.Code)
+		}
+	})
 }

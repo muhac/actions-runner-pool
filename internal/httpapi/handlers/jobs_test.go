@@ -22,6 +22,8 @@ type jobsStore struct {
 	getErr          error
 	retryErr        error
 	cancelErr       error
+	summary         *store.Summary
+	summaryErr      error
 	last            store.JobListFilter
 	listCalls       int
 	retryCalls      int
@@ -38,6 +40,16 @@ func (s *jobsStore) ListJobs(_ context.Context, f store.JobListFilter) ([]*store
 		return nil, s.listErr
 	}
 	return s.jobs, nil
+}
+
+func (s *jobsStore) Summary(_ context.Context) (*store.Summary, error) {
+	if s.summaryErr != nil {
+		return nil, s.summaryErr
+	}
+	if s.summary == nil {
+		return &store.Summary{JobsByStatus: map[string]int64{}, RunnersByStatus: map[string]int64{}}, nil
+	}
+	return s.summary, nil
 }
 
 func (s *jobsStore) GetJob(_ context.Context, jobID int64) (*store.Job, error) {

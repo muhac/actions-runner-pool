@@ -45,72 +45,7 @@ func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	if err := ensureJobsColumns(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate jobs columns: %w", err)
-	}
-	if err := ensureJobsIndexes(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate jobs indexes: %w", err)
-	}
 	return &SQLite{db: db}, nil
-}
-
-func ensureJobsColumns(ctx context.Context, db *sql.DB) error {
-	cols := map[string]string{
-		"job_name":      "TEXT NOT NULL DEFAULT ''",
-		"run_id":        "INTEGER NOT NULL DEFAULT 0",
-		"run_attempt":   "INTEGER NOT NULL DEFAULT 0",
-		"workflow_name": "TEXT NOT NULL DEFAULT ''",
-		"payload_json":  "TEXT NOT NULL DEFAULT ''",
-	}
-
-	existing := map[string]struct{}{}
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(jobs)`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var (
-			cid      int
-			name     string
-			typeName string
-			notNull  int
-			dflt     sql.NullString
-			pk       int
-		)
-		if err := rows.Scan(&cid, &name, &typeName, &notNull, &dflt, &pk); err != nil {
-			return err
-		}
-		existing[name] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for name, def := range cols {
-		if _, ok := existing[name]; ok {
-			continue
-		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+name+` `+def); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ensureJobsIndexes(ctx context.Context, db *sql.DB) error {
-	for _, q := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_jobs_repo_updated ON jobs(repo, updated_at DESC, id DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_jobs_run_id ON jobs(run_id)`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ensureDSNPragma adds `_pragma=name(value)` to a modernc.org/sqlite DSN if
@@ -470,6 +405,48 @@ func (s *SQLite) ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error) 
 			return nil, err
 		}
 		out = append(out, &j)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) Summary(ctx context.Context) (*Summary, error) {
+	jobs, err := countByStatus(ctx, s.db, "jobs")
+	if err != nil {
+		return nil, err
+	}
+	runners, err := countByStatus(ctx, s.db, "runners")
+	if err != nil {
+		return nil, err
+	}
+	return &Summary{
+		JobsByStatus:    jobs,
+		RunnersByStatus: runners,
+	}, nil
+}
+
+var allowedStatusTables = map[string]struct{}{
+	"jobs":    {},
+	"runners": {},
+}
+
+func countByStatus(ctx context.Context, db *sql.DB, table string) (map[string]int64, error) {
+	if _, ok := allowedStatusTables[table]; !ok {
+		return nil, fmt.Errorf("countByStatus: unknown table %q", table)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM `+table+` GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		out[status] = count
 	}
 	return out, rows.Err()
 }
