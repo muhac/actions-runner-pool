@@ -27,7 +27,7 @@ type MetricsHandler struct {
 
 func NewMetricsHandler(cfg *config.Config, st store.Store, log *slog.Logger) *MetricsHandler {
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(&summaryCollector{cfg: cfg, store: st})
+	reg.MustRegister(&summaryCollector{cfg: cfg, store: st, log: log})
 	return &MetricsHandler{
 		Cfg:     cfg,
 		Store:   st,
@@ -48,6 +48,13 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 type summaryCollector struct {
 	cfg   *config.Config
 	store store.Store
+	log   *slog.Logger
+}
+
+func (c *summaryCollector) logError(msg string, err error) {
+	if c.log != nil {
+		c.log.Error(msg, "error", err)
+	}
 }
 
 var (
@@ -91,6 +98,7 @@ func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	defer cancel()
 	summary, err := c.store.Summary(ctx)
 	if err != nil {
+		c.logError("metrics: store summary", err)
 		ch <- prometheus.NewInvalidMetric(jobsTotalDesc, err)
 		return
 	}
