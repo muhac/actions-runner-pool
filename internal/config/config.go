@@ -49,9 +49,14 @@ type Config struct {
 	// runner launch (image pull + container start + retry budget).
 	ShutdownDrainTimeout time.Duration
 	DockerHost           string
-	GitHubAPIBase        string
-	GitHubWebBase        string
-	LogLevel             slog.Level
+	// RunnerWorkdirRoot is the host path containing per-runner workdirs,
+	// organized as <root>/<containerName>/. When set, reconciler cleanup
+	// removes these directories after runner teardown and via periodic
+	// orphan scans.
+	RunnerWorkdirRoot string
+	GitHubAPIBase     string
+	GitHubWebBase     string
+	LogLevel          slog.Level
 }
 
 var defaultRunnerCommand = []string{
@@ -85,6 +90,7 @@ func Load() (*Config, error) {
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
 		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
+		RunnerWorkdirRoot:    strings.TrimSpace(os.Getenv("RUNNER_WORKDIR_ROOT")),
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
 		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),

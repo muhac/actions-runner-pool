@@ -45,6 +45,24 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		if c.AdminToken != "" {
 			t.Errorf("AdminToken default = %q, want empty", c.AdminToken)
 		}
+		if c.RunnerWorkdirRoot != "" {
+			t.Errorf("RunnerWorkdirRoot default = %q, want empty", c.RunnerWorkdirRoot)
+		}
+	})
+}
+
+func TestLoad_RunnerWorkdirRoot_Trimmed(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":            "https://example.test",
+		"RUNNER_WORKDIR_ROOT": "  /tmp/runner  ",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.RunnerWorkdirRoot != "/tmp/runner" {
+			t.Fatalf("RunnerWorkdirRoot = %q, want /tmp/runner", c.RunnerWorkdirRoot)
+		}
 	})
 }
 
