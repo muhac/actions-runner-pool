@@ -129,9 +129,9 @@ type Reconciler struct {
 	// maintenanceCmd and maintenancePeriod drive the optional periodic
 	// user-supplied maintenance command (e.g. docker system prune).
 	// Both must be non-zero to enable the goroutine.
-	maintenanceCmd      []string
-	maintenancePeriod   time.Duration
-	nowFn               func() time.Time
+	maintenanceCmd    []string
+	maintenancePeriod time.Duration
+	nowFn             func() time.Time
 }
 
 // New constructs a Reconciler. maxLifetime is the hard upper bound on

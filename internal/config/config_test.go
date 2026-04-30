@@ -481,9 +481,9 @@ func jsonStringArray(t *testing.T, parts []string) string {
 func TestLoad_MaintenanceCommand_ValidBothSet(t *testing.T) {
 	cmd := jsonStringArray(t, []string{"docker", "system", "prune", "-f"})
 	withEnv(t, map[string]string{
-		"BASE_URL":              "https://example.test",
-		"MAINTENANCE_COMMAND":   cmd,
-		"MAINTENANCE_INTERVAL":  "6h",
+		"BASE_URL":             "https://example.test",
+		"MAINTENANCE_COMMAND":  cmd,
+		"MAINTENANCE_INTERVAL": "6h",
 	}, func() {
 		c, err := Load()
 		if err != nil {

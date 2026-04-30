@@ -63,8 +63,8 @@ type Config struct {
 	// Zero (default) disables the periodic maintenance task entirely.
 	MaintenanceInterval time.Duration
 	GitHubAPIBase       string
-	GitHubWebBase     string
-	LogLevel          slog.Level
+	GitHubWebBase       string
+	LogLevel            slog.Level
 }
 
 var defaultRunnerCommand = []string{
