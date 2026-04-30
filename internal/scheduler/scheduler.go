@@ -252,7 +252,7 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
 		confirmed, aborted := confirm404(drainCtx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
 		if aborted {
-			// ctx cancelled mid-confirm — process is shutting down.
+			// drainCtx cancelled mid-confirm — process is shutting down.
 			// Returning here avoids InsertRunner+Launch with a dying
 			// ctx, which would leave a half-created orphan that the
 			// orphan sweep only catches after the grace window.
