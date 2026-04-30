@@ -41,6 +41,47 @@ func TestSchema_AppliesAndIdempotent(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
+	s3, err := OpenSQLite(dsn)
+	if err != nil {
+		t.Fatalf("re-open for index check: %v", err)
+	}
+	idxRows, err := s3.db.QueryContext(context.Background(),
+		"SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name")
+	if err != nil {
+		t.Fatalf("query indexes: %v", err)
+	}
+	defer func() { _ = idxRows.Close() }()
+	var idxGot []string
+	for idxRows.Next() {
+		var n string
+		if err := idxRows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		idxGot = append(idxGot, n)
+	}
+	if err := idxRows.Err(); err != nil {
+		t.Fatalf("index rows iteration: %v", err)
+	}
+	idxWant := []string{
+		"idx_installation_repos_inst",
+		"idx_jobs_repo_updated",
+		"idx_jobs_run_id",
+		"idx_jobs_status",
+		"idx_runners_runner_name",
+		"idx_runners_status",
+	}
+	if len(idxGot) != len(idxWant) {
+		t.Fatalf("indexes = %v, want %v", idxGot, idxWant)
+	}
+	for i, w := range idxWant {
+		if idxGot[i] != w {
+			t.Fatalf("indexes[%d] = %q, want %q (full: %v)", i, idxGot[i], w, idxGot)
+		}
+	}
+	if err := s3.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	s2, err := OpenSQLite(dsn)
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
