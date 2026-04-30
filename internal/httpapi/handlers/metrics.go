@@ -65,7 +65,7 @@ var (
 	)
 	activeRunnersDesc = prometheus.NewDesc(
 		"gharp_active_runners",
-		"Current number of active runners.",
+		"Current number of active runners (starting + idle + busy).",
 		nil,
 		nil,
 	)
