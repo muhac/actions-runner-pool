@@ -78,7 +78,7 @@ func (h *JobsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		out.Jobs = append(out.Jobs, toJobListResponse(j))
 	}
 
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, out)
 }
 
 // GET /jobs/{job_id}
@@ -103,7 +103,7 @@ func (h *JobsHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, toJobDetailResponse(job))
+	writeJSON(w, toJobDetailResponse(job))
 }
 
 // POST /jobs/{job_id}/retry
@@ -151,7 +151,7 @@ func (h *JobsHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, actionResponse{Action: "retry", Job: toJobDetailResponse(job)})
+	writeJSON(w, actionResponse{Action: "retry", Job: toJobDetailResponse(job)})
 }
 
 // POST /jobs/{job_id}/cancel
@@ -196,7 +196,7 @@ func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, actionResponse{Action: "cancel", Job: toJobDetailResponse(job)})
+	writeJSON(w, actionResponse{Action: "cancel", Job: toJobDetailResponse(job)})
 }
 
 func parseJobIDPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -329,9 +329,9 @@ func toJobDetailResponse(j *store.Job) jobDetailResponse {
 	return jobDetailResponse{jobListResponse: toJobListResponse(j), PayloadJSON: j.PayloadJSON}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
