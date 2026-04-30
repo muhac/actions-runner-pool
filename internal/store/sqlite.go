@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -324,6 +325,63 @@ func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 	}
 	defer func() { _ = rows.Close() }()
 	var out []*Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(&j.ID, &j.Repo, &j.Action, &j.Labels, &j.DedupeKey, &j.Status, &j.Conclusion,
+			&j.RunnerID, &j.RunnerName, &j.ReceivedAt, &j.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &j)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	var b strings.Builder
+	b.WriteString(`SELECT id, repo, action, labels, dedupe_key, status, conclusion,
+		runner_id, runner_name, received_at, updated_at FROM jobs`)
+
+	args := make([]any, 0, len(f.Statuses)+2)
+	where := make([]string, 0, 2)
+	if len(f.Statuses) > 0 {
+		ph := make([]string, 0, len(f.Statuses))
+		for _, st := range f.Statuses {
+			if strings.TrimSpace(st) == "" {
+				continue
+			}
+			ph = append(ph, "?")
+			args = append(args, st)
+		}
+		if len(ph) > 0 {
+			where = append(where, "status IN ("+strings.Join(ph, ",")+")")
+		}
+	}
+	if repo := strings.TrimSpace(f.Repo); repo != "" {
+		where = append(where, "repo = ?")
+		args = append(args, repo)
+	}
+	if len(where) > 0 {
+		b.WriteString(" WHERE ")
+		b.WriteString(strings.Join(where, " AND "))
+	}
+	b.WriteString(" ORDER BY updated_at DESC, id DESC LIMIT ")
+	b.WriteString(strconv.Itoa(limit))
+
+	rows, err := s.db.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]*Job, 0, limit)
 	for rows.Next() {
 		var j Job
 		if err := rows.Scan(&j.ID, &j.Repo, &j.Action, &j.Labels, &j.DedupeKey, &j.Status, &j.Conclusion,

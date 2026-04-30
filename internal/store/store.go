@@ -53,6 +53,7 @@ type Store interface {
 	// looping on jobs whose installation token can no longer be minted.
 	// Returns the number of rows actually transitioned.
 	CancelPendingJobsForRepo(ctx context.Context, repoFullName string) (int64, error)
+	ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error)
 	// PendingJobs returns rows still owed dispatch work — both 'pending'
 	// rows and stale 'dispatched' rows whose runner never claimed a job
 	// (the runner↔job race documented in architecture.md).

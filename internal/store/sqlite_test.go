@@ -515,6 +515,67 @@ func TestCancelPendingJobsForRepo_OnlyPendingAndDispatched(t *testing.T) {
 	}
 }
 
+func TestListJobs_FilterOrderAndLimit(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	seed := []*Job{
+		{ID: 1, Repo: "a/repo", Action: "queued", Labels: "x", DedupeKey: "1", Status: "pending"},
+		{ID: 2, Repo: "a/repo", Action: "queued", Labels: "x", DedupeKey: "2", Status: "completed"},
+		{ID: 3, Repo: "b/repo", Action: "queued", Labels: "x", DedupeKey: "3", Status: "pending"},
+		{ID: 4, Repo: "b/repo", Action: "queued", Labels: "x", DedupeKey: "4", Status: "dispatched"},
+	}
+	for _, j := range seed {
+		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+			t.Fatalf("seed %d: %v", j.ID, err)
+		}
+	}
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// id=4 newest, then 3, then 2, then 1.
+	for idx, id := range []int64{1, 2, 3, 4} {
+		when := base.Add(time.Duration(idx) * time.Second)
+		if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET updated_at=? WHERE id=?`, when, id); err != nil {
+			t.Fatalf("set updated_at id=%d: %v", id, err)
+		}
+	}
+
+	all, err := s.ListJobs(ctx, JobListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("len(all)=%d, want 4", len(all))
+	}
+	if all[0].ID != 4 || all[1].ID != 3 || all[2].ID != 2 || all[3].ID != 1 {
+		t.Fatalf("unexpected order: [%d %d %d %d]", all[0].ID, all[1].ID, all[2].ID, all[3].ID)
+	}
+
+	pending, err := s.ListJobs(ctx, JobListFilter{Statuses: []string{"pending"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[0].ID != 3 || pending[1].ID != 1 {
+		t.Fatalf("pending mismatch: %+v", pending)
+	}
+
+	byRepo, err := s.ListJobs(ctx, JobListFilter{Repo: "a/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRepo) != 2 || byRepo[0].ID != 2 || byRepo[1].ID != 1 {
+		t.Fatalf("repo mismatch: %+v", byRepo)
+	}
+
+	limited, err := s.ListJobs(ctx, JobListFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 2 || limited[0].ID != 4 || limited[1].ID != 3 {
+		t.Fatalf("limit mismatch: %+v", limited)
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"

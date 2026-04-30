@@ -15,6 +15,7 @@ same.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port. |
+| `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Currently applies to `GET /jobs`: if set, requests must send `Authorization: Bearer <token>`; if empty/unset, the endpoint is open. |
 | `STORE_DSN` | `file:/data/gharp.db?_pragma=journal_mode(WAL)` (in the published `muhac/gharp` image) ・ `file:gharp.db?_pragma=journal_mode(WAL)` (when running the binary directly) | SQLite DSN. The image sets a default that lands in `/data`, which is declared as a `VOLUME` — mount a host directory or named volume there to survive container restarts. Override if you want the DB elsewhere. |
 | `LOG_LEVEL` | `info` | One of `debug` / `info` / `warn` (alias `warning`) / `error`. Unknown values fall back to `info`. |
 
@@ -63,6 +64,7 @@ for a worked example.
 - `GITHUB_API_BASE` / `GITHUB_WEB_BASE` not absolute (no scheme/host) → startup fails.
 - `RUNNER_COMMAND` malformed JSON, empty array, or missing required placeholder → startup fails.
 - `ALLOW_PUBLIC_REPOS` only enables on literal `true` (case-insensitive); unset, empty, or any other value is `false`.
+- `ADMIN_TOKEN` is whitespace-trimmed at startup.
 - `REPO_ALLOWLIST` empty or unset means no public repo bypasses.
 - `MAX_CONCURRENT_RUNNERS` non-integer → silently uses default. `0` or negative → startup fails (otherwise the cap-exceeded branch would re-enqueue every job forever).
 - `RUNNER_MAX_LIFETIME` unparseable → silently uses default. `0` or negative → startup fails.

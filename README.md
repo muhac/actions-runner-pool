@@ -82,6 +82,35 @@ dropped — see [`docs/configuration.md`](docs/configuration.md).
 For the full deployment guide (from-source build, docker compose,
 volumes, upgrades, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
 
+## Ops APIs
+
+- `GET /healthz` returns `ok`.
+- `GET /jobs` returns recent jobs as JSON.
+
+`/jobs` supports query params:
+
+- `status` (optional): one or more of `pending`, `dispatched`, `in_progress`, `completed`.
+  - Repeated form: `?status=pending&status=dispatched`
+  - CSV form: `?status=pending,dispatched`
+- `repo` (optional): exact `owner/name`
+- `limit` (optional): default `100`, max `500`
+
+Authentication for `/jobs`:
+
+- If `ADMIN_TOKEN` is unset/empty, the endpoint is open.
+- If `ADMIN_TOKEN` is set, requests must include `Authorization: Bearer <token>`.
+
+Examples:
+
+```bash
+# Open mode (ADMIN_TOKEN empty)
+curl "http://localhost:8080/jobs?status=pending&limit=50"
+
+# Token-protected mode
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/jobs?status=pending,dispatched&repo=owner/repo"
+```
+
 ## 🤔 Why?
 
 GitHub does **not support "user-level" runners**.

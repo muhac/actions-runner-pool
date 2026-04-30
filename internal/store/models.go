@@ -14,11 +14,11 @@ type AppConfig struct {
 }
 
 type Installation struct {
-	ID          int64
-	AccountID   int64
+	ID           int64
+	AccountID    int64
 	AccountLogin string
-	AccountType string
-	CreatedAt   time.Time
+	AccountType  string
+	CreatedAt    time.Time
 }
 
 // RepoInstallation is one row of the installation_repos join table —
@@ -41,6 +41,12 @@ type Job struct {
 	RunnerName string
 	ReceivedAt time.Time
 	UpdatedAt  time.Time
+}
+
+type JobListFilter struct {
+	Statuses []string
+	Repo     string
+	Limit    int
 }
 
 type Runner struct {
