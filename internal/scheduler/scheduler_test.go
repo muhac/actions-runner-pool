@@ -156,6 +156,33 @@ func (l *spyLauncher) Launch(ctx context.Context, spec runner.Spec) error {
 	return l.err
 }
 
+type blockingLauncher struct {
+	calls   atomic.Int64
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingLauncher() *blockingLauncher {
+	return &blockingLauncher{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+}
+
+func (l *blockingLauncher) Launch(ctx context.Context, spec runner.Spec) error {
+	l.calls.Add(1)
+	select {
+	case l.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-l.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // --- in-memory-ish store wrappers via SQLite ---------------------------------
 //
 // We reuse the real SQLite store (in-memory file via tempdir) so test setup
@@ -718,6 +745,132 @@ func TestDispatch_CapBackoffCancelled_NoRequeue(t *testing.T) {
 
 	if got := len(s.jobCh); got != 0 {
 		t.Fatalf("channel depth=%d, want 0 (ctx cancel must skip re-enqueue)", got)
+	}
+}
+
+func TestDispatchWithContext_CapBackoffRunCtxCancelled_NoRequeue(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	if err := st.InsertRunner(context.Background(), &store.Runner{
+		ContainerName: "preexisting",
+		Repo:          "owner/repo",
+		RunnerName:    "preexisting",
+		Labels:        "self-hosted",
+		Status:        "starting",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestScheduler(t, newCfg(1), st, &spyGH{}, &spyLauncher{})
+	s.capBackoff = 100 * time.Millisecond
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	s.dispatchWithContext(runCtx, context.Background(), 1)
+	cancelRun()
+	time.Sleep(150 * time.Millisecond)
+
+	if got := len(s.jobCh); got != 0 {
+		t.Fatalf("channel depth=%d, want 0 when runCtx is cancelled during cap backoff", got)
+	}
+}
+
+func TestRunWithDrain_ShutdownStopsIntakeButDrainsCurrentDispatch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+	seedPendingJob(t, st, 2, "owner/repo")
+
+	gh := &spyGH{}
+	ln := newBlockingLauncher()
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.replayPeriod = time.Hour
+	s.nameFn = func(jobID int64) (string, string) {
+		name := "test-runner-" + itoa(jobID)
+		return name, name
+	}
+	s.jobCh = make(chan int64, 256)
+	s.Enqueue(1)
+	s.Enqueue(2)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	drainCtx, cancelDrain := context.WithCancel(context.Background())
+	defer cancelDrain()
+	done := make(chan error, 1)
+	go func() { done <- s.RunWithDrain(runCtx, drainCtx) }()
+
+	select {
+	case <-ln.started:
+	case <-time.After(time.Second):
+		t.Fatal("first dispatch never started")
+	}
+
+	cancelRun()
+	select {
+	case err := <-done:
+		t.Fatalf("RunWithDrain returned early during in-flight dispatch: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(ln.release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunWithDrain returned %v, want context.Canceled", err)
+	}
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls=%d, want 1", got)
+	}
+	job, err := st.GetJob(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.Status != "pending" {
+		t.Fatalf("job 2 status=%v, want pending and unstarted", job)
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active runners=%d, want exactly the drained in-flight runner", len(active))
+	}
+}
+
+func TestRunWithDrain_DrainCancellationBoundsBlockedDispatch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := newBlockingLauncher()
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.replayPeriod = time.Hour
+	s.jobCh = make(chan int64, 256)
+	s.Enqueue(1)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	drainCtx, cancelDrain := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.RunWithDrain(runCtx, drainCtx) }()
+
+	select {
+	case <-ln.started:
+	case <-time.After(time.Second):
+		t.Fatal("dispatch never started")
+	}
+
+	cancelRun()
+	cancelDrain()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunWithDrain returned %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunWithDrain did not exit after drain cancellation")
 	}
 }
 

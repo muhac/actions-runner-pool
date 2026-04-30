@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -591,7 +592,160 @@ func pollRunnerCount(t *testing.T, dbPath string, atLeast int, timeout time.Dura
 	return n
 }
 
+func waitForFile(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return os.ErrNotExist
+}
+
 // --- additional integration scenarios ---------------------------------------
+
+func TestIntegration_SIGTERM_DrainsInflightDispatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("RUNNER_COMMAND substitution uses a unix path")
+	}
+
+	var instHits, regHits atomic.Int64
+	gh := bootFakeGitHub(t, happyGitHubHandler(&instHits, &regHits))
+
+	tmp := t.TempDir()
+	binPath := filepath.Join(tmp, "gharp")
+	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	port, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "it.db")
+	startedPath := filepath.Join(tmp, "launch-started")
+	finishedPath := filepath.Join(tmp, "launch-finished")
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	st, err := store.OpenSQLite("file:" + dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveAppConfig(context.Background(), &store.AppConfig{
+		AppID: 1, Slug: "gharp-it", WebhookSecret: itWebhookSecret,
+		PEM: pemBytes, ClientID: "Iv1.test", BaseURL: "http://127.0.0.1:" + port,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	runnerCmd, _ := json.Marshal([]string{
+		"/bin/sh",
+		"-c",
+		"echo started > \"" + startedPath + "\" && sleep 1 && echo finished > \"" + finishedPath + "\"",
+		"sh",
+		"{{.ContainerName}}", "{{.RegistrationToken}}", "{{.RunnerName}}",
+		"{{.RepoURL}}", "{{.Labels}}", "{{.Image}}",
+	})
+
+	cmd := exec.Command(binPath)
+	cmd.Env = append(os.Environ(),
+		"PORT="+port,
+		"BASE_URL=http://127.0.0.1:"+port,
+		"STORE_DSN=file:"+dbPath,
+		"GITHUB_API_BASE="+gh.URL,
+		"RUNNER_COMMAND="+string(runnerCmd),
+		"MAX_CONCURRENT_RUNNERS=4",
+		"LOG_LEVEL=warn",
+		"RUNNER_NAME_PREFIX=gharp-it-"+t.Name()+"-",
+	)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if waited {
+			return
+		}
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+
+	baseURL := "http://127.0.0.1:" + port
+	if err := waitForHTTPClient(baseURL+"/healthz", 5*time.Second); err != nil {
+		t.Fatalf("healthz never up: %v", err)
+	}
+
+	installRepo(t, baseURL, 99, "owner/repo")
+	queueJob(t, baseURL, 7777, 99, "owner/repo")
+
+	if err := waitForFile(startedPath, 5*time.Second); err != nil {
+		t.Fatalf("launch never started: %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	go func() { waitDone <- cmd.Wait() }()
+
+	select {
+	case err := <-waitDone:
+		waited = true
+		t.Fatalf("process exited before inflight dispatch drained: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := waitForFile(finishedPath, 5*time.Second); err != nil {
+		t.Fatalf("launch did not finish during drain window: %v", err)
+	}
+
+	select {
+	case err := <-waitDone:
+		waited = true
+		if err != nil {
+			t.Fatalf("wait after drain: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit after drained launch completed")
+	}
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var runnerStatus, jobStatus string
+	if err := db.QueryRow(`SELECT status FROM runners WHERE repo='owner/repo' LIMIT 1`).Scan(&runnerStatus); err != nil {
+		t.Fatalf("runners row missing after drain: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE id=7777`).Scan(&jobStatus); err != nil {
+		t.Fatalf("job row missing after drain: %v", err)
+	}
+	if runnerStatus != "starting" {
+		t.Fatalf("runners.status=%q, want starting after drained launch", runnerStatus)
+	}
+	if jobStatus != "dispatched" {
+		t.Fatalf("jobs.status=%q, want dispatched after drained launch", jobStatus)
+	}
+	if regHits.Load() != 1 {
+		t.Fatalf("registration token mints=%d, want 1", regHits.Load())
+	}
+}
 
 // (cap) MAX_CONCURRENT_RUNNERS=1 with a pre-existing 'starting' row: the new
 // queued job re-queues, no second runners row appears, no token mint happens.
