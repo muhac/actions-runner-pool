@@ -80,57 +80,7 @@ fresh runner. Jobs requiring a label this pool doesn't advertise are
 dropped — see [`docs/configuration.md`](docs/configuration.md).
 
 For the full deployment guide (from-source build, docker compose,
-volumes, upgrades, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
-
-## Ops APIs
-
-- `GET /healthz` returns `ok`.
-- `GET /jobs` returns recent jobs as JSON.
-- `GET /jobs/{job_id}` returns full job detail, including stored webhook payload.
-- `POST /jobs/{job_id}/retry` retries a completed job locally (status resets to pending and is enqueued).
-- `POST /jobs/{job_id}/cancel` cancels a pending/dispatched job locally.
-
-`/jobs` supports query params:
-
-- `status` (optional): one or more of `pending`, `dispatched`, `in_progress`, `completed`.
-  - Repeated form: `?status=pending&status=dispatched`
-  - CSV form: `?status=pending,dispatched`
-- `repo` (optional): exact `owner/name`
-- `limit` (optional): default `100`, max `500`
-
-`/jobs` rows include metadata captured from `workflow_job` payloads such as:
-
-- `job_name`
-- `run_id`
-- `run_attempt`
-- `workflow_name`
-
-Authentication for `/jobs`:
-
-- If `ADMIN_TOKEN` is unset/empty, the endpoint is open.
-- If `ADMIN_TOKEN` is set, requests must include `Authorization: Bearer <token>`.
-
-Examples:
-
-```bash
-# Open mode (ADMIN_TOKEN empty)
-curl "http://localhost:8080/jobs?status=pending&limit=50"
-
-# Token-protected mode
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://localhost:8080/jobs?status=pending,dispatched&repo=owner/repo"
-
-# Job detail by GitHub workflow_job.id
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://localhost:8080/jobs/123456789"
-
-# Local control actions
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://localhost:8080/jobs/123456789/retry"
-
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://localhost:8080/jobs/123456789/cancel"
-```
+volumes, upgrades, ops APIs, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
 
 ## 🤔 Why?
 
