@@ -21,6 +21,7 @@ Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp
 docker run -d --name gharp \
   -p 8080:8080 \
   -e BASE_URL=https://gharp.example.com \
+  -e RUNNER_WORKDIR_ROOT=/tmp/gharp \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp/gharp:/tmp/gharp \
   -v gharp-data:/data \
