@@ -37,6 +37,8 @@ package reconciler
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -120,6 +122,9 @@ type Reconciler struct {
 	grace               time.Duration
 	maxLifetime         time.Duration
 	containerNamePrefix string
+	workdirRoot         string
+	workdirSweepPeriod  time.Duration
+	workdirGrace        time.Duration
 	nowFn               func() time.Time
 }
 
@@ -133,11 +138,14 @@ type Reconciler struct {
 // DefaultContainerNamePrefix. gh is optional — pass nil to skip the
 // GitHub-side ghost-runner sweep entirely (useful for tests, or
 // deployments that prefer to let GitHub auto-expire stale
-// registrations on its own).
-func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix string) *Reconciler {
+// registrations on its own). workdirRoot points to the host directory
+// where per-runner workdirs are stored as <workdirRoot>/<containerName>.
+// Empty disables filesystem cleanup.
+func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
 	}
+	workdirRoot = strings.TrimSpace(workdirRoot)
 	return &Reconciler{
 		store:  st,
 		docker: dk,
@@ -158,6 +166,9 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 		grace:               30 * time.Second,
 		maxLifetime:         maxLifetime,
 		containerNamePrefix: containerNamePrefix,
+		workdirRoot:         workdirRoot,
+		workdirSweepPeriod:  5 * time.Minute,
+		workdirGrace:        5 * time.Minute,
 		nowFn:               time.Now,
 	}
 }
@@ -172,6 +183,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	if r.gh != nil {
 		go r.runGitHubSweeper(ctx)
 	}
+	if r.workdirRoot != "" {
+		go r.runWorkdirSweeper(ctx)
+	}
 	t := time.NewTicker(r.period)
 	defer t.Stop()
 	for {
@@ -180,6 +194,20 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-t.C:
 			r.Reconcile(ctx)
+		}
+	}
+}
+
+func (r *Reconciler) runWorkdirSweeper(ctx context.Context) {
+	r.sweepOrphanWorkdirs(ctx)
+	t := time.NewTicker(r.workdirSweepPeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.sweepOrphanWorkdirs(ctx)
 		}
 	}
 }
@@ -250,6 +278,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) (alive map[string]st
 				r.log.Error("reconciler: UpdateRunnerStatus(finished) failed", "container", row.ContainerName, "err", err)
 				continue
 			}
+			r.cleanupRunnerWorkdir(row.ContainerName)
 			r.log.Info("reconciler: ghost runner cleared", "container", row.ContainerName, "runner_name", row.RunnerName, "repo", row.Repo)
 			ghostFinished++
 			continue
@@ -275,6 +304,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) (alive map[string]st
 			if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
 				r.log.Error("reconciler: UpdateRunnerStatus(finished) after lifetime reap failed", "container", row.ContainerName, "err", err)
 			}
+			r.cleanupRunnerWorkdir(row.ContainerName)
 			lifetimeReaped++
 			continue
 		}
@@ -322,8 +352,74 @@ func (r *Reconciler) sweepOrphanContainers(ctx context.Context, known map[string
 			r.log.Error("reconciler: ForceRemove failed", "container", c.Name, "err", err)
 			continue
 		}
+		r.cleanupRunnerWorkdir(c.Name)
 		r.log.Info("reconciler: orphan container removed", "container", c.Name)
 		removed++
+	}
+	return removed
+}
+
+func (r *Reconciler) cleanupRunnerWorkdir(containerName string) {
+	if r.workdirRoot == "" {
+		return
+	}
+	if !strings.HasPrefix(containerName, r.containerNamePrefix) {
+		return
+	}
+	root := filepath.Clean(r.workdirRoot)
+	target := filepath.Clean(filepath.Join(root, containerName))
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		r.log.Warn("reconciler: refusing unsafe workdir cleanup target", "container", containerName, "target", target, "err", err)
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		r.log.Warn("reconciler: workdir cleanup failed", "container", containerName, "path", target, "err", err)
+	}
+}
+
+func (r *Reconciler) sweepOrphanWorkdirs(ctx context.Context) (removed int) {
+	if r.workdirRoot == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(r.workdirRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		r.log.Warn("reconciler: failed to list workdir root", "root", r.workdirRoot, "err", err)
+		return 0
+	}
+	now := r.nowFn()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, r.containerNamePrefix) {
+			continue
+		}
+		exists, err := r.docker.Inspect(ctx, name)
+		if err != nil {
+			r.log.Warn("reconciler: docker inspect failed during workdir sweep", "container", name, "err", err)
+			continue
+		}
+		if exists {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			r.log.Warn("reconciler: failed to stat workdir entry", "container", name, "err", err)
+			continue
+		}
+		if now.Sub(info.ModTime()) < r.workdirGrace {
+			continue
+		}
+		r.cleanupRunnerWorkdir(name)
+		removed++
+	}
+	if removed > 0 {
+		r.log.Info("reconciler: orphan workdirs removed", "count", removed, "root", r.workdirRoot)
 	}
 	return removed
 }
