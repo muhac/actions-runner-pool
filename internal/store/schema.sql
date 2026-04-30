@@ -45,8 +45,6 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-CREATE INDEX IF NOT EXISTS idx_jobs_repo_updated ON jobs(repo, updated_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_jobs_run_id ON jobs(run_id);
 
 CREATE TABLE IF NOT EXISTS runners (
   container_name TEXT    PRIMARY KEY,

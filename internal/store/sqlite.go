@@ -49,6 +49,10 @@ func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate jobs columns: %w", err)
 	}
+	if err := ensureJobsIndexes(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate jobs indexes: %w", err)
+	}
 	return &SQLite{db: db}, nil
 }
 
@@ -91,6 +95,18 @@ func ensureJobsColumns(ctx context.Context, db *sql.DB) error {
 			continue
 		}
 		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+name+` `+def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureJobsIndexes(ctx context.Context, db *sql.DB) error {
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_jobs_repo_updated ON jobs(repo, updated_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_jobs_run_id ON jobs(run_id)`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
