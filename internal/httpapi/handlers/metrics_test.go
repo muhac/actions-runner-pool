@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/muhac/actions-runner-pool/internal/config"
 	"github.com/muhac/actions-runner-pool/internal/store"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestMetrics_OpenWhenAdminTokenEmpty(t *testing.T) {
@@ -63,5 +65,24 @@ func TestMetrics_TokenRequiredWhenAdminTokenSet(t *testing.T) {
 	h.Get(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestSummaryCollector_CollectEmitsInvalidMetricPerDescriptorOnSummaryError(t *testing.T) {
+	c := &summaryCollector{
+		cfg:   &config.Config{MaxConcurrentRunners: 4},
+		store: &jobsStore{summaryErr: errors.New("boom")},
+	}
+
+	ch := make(chan prometheus.Metric, 8)
+	c.Collect(ch)
+	close(ch)
+
+	var got int
+	for range ch {
+		got++
+	}
+	if got != 3 {
+		t.Fatalf("invalid metric count = %d, want 3", got)
 	}
 }

@@ -95,6 +95,8 @@ func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	if err != nil {
 		c.logError("metrics: store summary", err)
 		ch <- prometheus.NewInvalidMetric(jobsTotalDesc, err)
+		ch <- prometheus.NewInvalidMetric(runnersTotalDesc, err)
+		ch <- prometheus.NewInvalidMetric(maxConcurrentRunnersDesc, err)
 		return
 	}
 
