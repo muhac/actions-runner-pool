@@ -25,6 +25,9 @@ func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *sched
 	mux.HandleFunc("POST /jobs/{job_id}/retry", jobs.Retry)
 	mux.HandleFunc("POST /jobs/{job_id}/cancel", jobs.Cancel)
 
+	stats := &handlers.StatsHandler{Cfg: cfg, Store: st, Log: log}
+	mux.HandleFunc("GET /stats", stats.Get)
+
 	metrics := handlers.NewMetricsHandler(cfg, st, log)
 	mux.HandleFunc("GET /metrics", metrics.Get)
 
