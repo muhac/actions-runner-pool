@@ -73,16 +73,13 @@ func run() error {
 
 	go func() {
 		<-signalCtx.Done()
-		log.Info("shutdown signal received; draining scheduler", "timeout", cfg.ShutdownDrainTimeout)
-		timer := time.NewTimer(cfg.ShutdownDrainTimeout)
+		log.Info("shutdown signal received; draining scheduler", "timeout", 30*time.Second)
+		timer := time.NewTimer(30 * time.Second)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			// Hard deadline: drain took too long; cancel it.
 			drainCancel()
 		case <-drainCtx.Done():
-			// drainCtx was cancelled by defer drainCancel() after run() exits
-			// (process already done — just let the goroutine clean up the timer).
 		}
 	}()
 
