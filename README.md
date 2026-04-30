@@ -21,15 +21,17 @@ Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp
 docker run -d --name gharp \
   -p 8080:8080 \
   -e BASE_URL=https://gharp.example.com \
-  -e RUNNER_WORKDIR_ROOT=/tmp/gharp \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /tmp/gharp:/tmp/gharp \
   -v gharp-data:/data \
   muhac/gharp:latest
 ```
 
 `BASE_URL` must be a public HTTPS URL GitHub can reach, terminating at
-the container's port 8080 (above mapped to the host's 8080). See
+the container's port 8080 (above mapped to the host's 8080). If you
+customise `RUNNER_COMMAND` to mount a host workdir (e.g.
+`-v /tmp/gharp/{{.ContainerName}}:/_work`), also add
+`-e RUNNER_WORKDIR_ROOT=/tmp/gharp` and `-v /tmp/gharp:/tmp/gharp` so
+gharp can clean up those directories automatically. See
 [`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
 
 > 🔐 **Secure the admin API.** The `/jobs`, `/jobs/{id}/retry`,
