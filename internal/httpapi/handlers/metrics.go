@@ -17,6 +17,8 @@ var (
 	metricRunnerStatuses = store.RunnerStatuses
 )
 
+const metricsSummaryTimeout = 5 * time.Second
+
 type MetricsHandler struct {
 	Cfg   *config.Config
 	Store store.Store
@@ -87,7 +89,7 @@ func (c *summaryCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	// prometheus.Collector does not thread a request context; use a timeout so
 	// a slow DB query does not block the scrape indefinitely.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), metricsSummaryTimeout)
 	defer cancel()
 	summary, err := c.store.Summary(ctx)
 	if err != nil {
