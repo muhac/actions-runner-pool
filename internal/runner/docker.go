@@ -1,3 +1,4 @@
+// Package runner manages the execution of GitHub Actions runners via Docker containers.
 package runner
 
 import (
@@ -11,11 +12,13 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/config"
 )
 
+// Launcher executes GitHub Actions runners as Docker containers.
 type Launcher struct {
 	cfg                 *config.Config
 	launchObserveWindow time.Duration
 }
 
+// NewLauncher creates a new Launcher instance.
 func NewLauncher(cfg *config.Config) *Launcher {
 	return &Launcher{
 		cfg:                 cfg,
@@ -23,8 +26,7 @@ func NewLauncher(cfg *config.Config) *Launcher {
 	}
 }
 
-// Spec is the data passed into each template element when rendering the
-// docker run argv. Keep field names in sync with config.requiredPlaceholders.
+// Spec provides the data for rendering and executing a docker run command.
 type Spec struct {
 	ContainerName     string
 	RegistrationToken string
@@ -34,11 +36,9 @@ type Spec struct {
 	Image             string
 }
 
-// Launch renders the configured RUNNER_COMMAND template against spec and
-// starts the container. It observes the process briefly so early docker
-// failures after Start (for example daemon/name/pull errors) can be retried;
-// after that, container lifecycle is tracked via webhook events and the
-// reconciliation loop, not this call.
+// Launch renders the runner command template and starts a Docker container.
+// Observes process briefly to catch early startup failures, then relies on
+// webhooks and reconciliation for lifecycle tracking.
 func (l *Launcher) Launch(ctx context.Context, spec Spec) error {
 	if spec.Image == "" {
 		spec.Image = l.cfg.RunnerImage

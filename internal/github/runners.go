@@ -24,6 +24,7 @@ func splitRepoFullName(repoFullName string) (owner, repo string, err error) {
 // POST /repos/{owner}/{repo}/actions/runners/registration-token.
 //
 // Tokens are single-use under EPHEMERAL=1; never cache.
+// RegistrationToken returns a runner registration token for a repository.
 func (c *Client) RegistrationToken(ctx context.Context, installationToken, repoFullName string) (string, error) {
 	owner, repo, err := splitRepoFullName(repoFullName)
 	if err != nil {
@@ -58,6 +59,7 @@ func (c *Client) RegistrationToken(ctx context.Context, installationToken, repoF
 	return body.Token, nil
 }
 
+// RepoRunner represents a GitHub Actions runner in a repository.
 type RepoRunner struct {
 	ID     int64
 	Name   string

@@ -1,3 +1,6 @@
+// Package main is the entrypoint for the GitHub Actions runner autoscaler.
+// It initializes configuration, storage, GitHub client, scheduler, reconciler,
+// and HTTP API server, then runs them concurrently with graceful shutdown support.
 package main
 
 import (

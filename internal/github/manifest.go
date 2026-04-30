@@ -10,6 +10,7 @@ import (
 	"net/url"
 )
 
+// Manifest represents a GitHub App manifest.
 type Manifest struct {
 	Name               string            `json:"name"`
 	URL                string            `json:"url"`
@@ -20,6 +21,7 @@ type Manifest struct {
 	DefaultEvents      []string          `json:"default_events"`
 }
 
+// AppCredentials holds GitHub App credentials from the manifest exchange.
 type AppCredentials struct {
 	AppID         int64
 	Slug          string
@@ -29,6 +31,7 @@ type AppCredentials struct {
 	ClientSecret  string
 }
 
+// BuildManifest creates a GitHub App manifest for the given base URL.
 func BuildManifest(baseURL string) Manifest {
 	return Manifest{
 		// GitHub App names are globally unique; suffix the BaseURL hash so
@@ -68,6 +71,7 @@ func nameSuffix(baseURL string) string {
 //
 // The single-use code IS the credential; no auth header is sent. Code expires
 // in ~10 min so callers must invoke immediately and not retry.
+// ConvertCode exchanges a temporary installation code for App credentials.
 func (c *Client) ConvertCode(ctx context.Context, code string) (*AppCredentials, error) {
 	endpoint := fmt.Sprintf("%s/app-manifests/%s/conversions", c.cfg.GitHubAPIBase, url.PathEscape(code))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)

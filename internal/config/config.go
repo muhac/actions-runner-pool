@@ -1,3 +1,4 @@
+// Package config provides environment-based configuration for the autoscaler.
 package config
 
 import (
@@ -12,6 +13,7 @@ import (
 	"time"
 )
 
+// Config holds the application configuration loaded from environment variables.
 type Config struct {
 	Port        string
 	BaseURL     string
@@ -87,6 +89,7 @@ var requiredPlaceholders = []string{
 	"{{.Labels}}",
 }
 
+// Load reads environment variables and returns a validated Config.
 func Load() (*Config, error) {
 	c := &Config{
 		Port:                 envOr("PORT", "8080"),

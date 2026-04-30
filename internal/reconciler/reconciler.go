@@ -113,6 +113,7 @@ type GitHubClient interface {
 	DeleteRepoRunner(ctx context.Context, installationToken, repoFullName string, runnerID int64) error
 }
 
+// Reconciler reconciles the local runner table and container state with GitHub's runner registry.
 type Reconciler struct {
 	store               Store
 	docker              Docker
@@ -149,6 +150,7 @@ type Reconciler struct {
 // Empty disables filesystem cleanup. maintenanceCmd is an optional
 // argv (no shell) run every maintenancePeriod; either being zero
 // disables the maintenance goroutine.
+// New creates a new Reconciler.
 func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string, maintenanceCmd []string, maintenancePeriod time.Duration) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
@@ -188,6 +190,8 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 // GitHub-side sweep runs in its own serial goroutine so slow GitHub API
 // calls cannot delay local docker cleanup. Errors are logged, never
 // propagated.
+// Run starts the reconciliation loop; blocks until ctx is cancelled.
+// Reconciles container state, active runners, and GitHub's runner registry.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.Reconcile(ctx)
 	if r.gh != nil {

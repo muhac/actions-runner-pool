@@ -1,3 +1,4 @@
+// Package store provides SQLite-backed persistence for runner, job, and app configuration state.
 package store
 
 import (
@@ -17,14 +18,17 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+// SQLite provides a SQLite-backed implementation of the Store interface.
 type SQLite struct {
 	db *sql.DB
 }
 
+// OpenSQLite opens a SQLite database at the given DSN and initializes the schema.
 func OpenSQLite(dsn string) (*SQLite, error) {
 	return OpenSQLiteWithContext(context.Background(), dsn)
 }
 
+// OpenSQLiteWithContext opens a SQLite database with a context timeout for initialization.
 func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 	// foreign_keys is per-connection in sqlite; setting it via the DSN ensures
 	// every connection in database/sql's pool gets it (a one-shot

@@ -11,12 +11,10 @@ import (
 	"time"
 )
 
-// ExecDocker implements Docker by shelling out to the `docker` CLI.
-// We deliberately avoid the docker SDK to keep the dependency tree
-// minimal — the launcher already shells out, so the deployment already
-// has a working `docker` binary on PATH.
+// ExecDocker implements Docker by shelling out to the docker CLI.
 type ExecDocker struct{}
 
+// NewExecDocker creates a new ExecDocker instance.
 func NewExecDocker() *ExecDocker { return &ExecDocker{} }
 
 // Inspect returns whether a container with the given name exists at

@@ -1,3 +1,4 @@
+// Package github provides GitHub App authentication and API interactions.
 package github
 
 import (
@@ -8,6 +9,7 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/config"
 )
 
+// Client provides GitHub API operations via an installed App.
 type Client struct {
 	cfg        *config.Config
 	http       *http.Client
@@ -15,6 +17,7 @@ type Client struct {
 	nowFn      func() time.Time
 }
 
+// NewClient creates a new GitHub client.
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		cfg:   cfg,

@@ -12,7 +12,7 @@ import (
 )
 
 // AppJWT mints a short-lived JWT signed with the App private key (RS256).
-// iat = now-60s (clock skew margin), exp = now+10m, iss = app_id.
+// Claims: iat=now-60s (clock skew), exp=now+10m, iss=appID.
 func (c *Client) AppJWT(pem []byte, appID int64) (string, error) {
 	key, err := jwt.ParseRSAPrivateKeyFromPEM(pem)
 	if err != nil {
@@ -39,10 +39,8 @@ type cachedInstallationToken struct {
 	exp   time.Time
 }
 
-// InstallationToken returns a cached or freshly minted installation token for
-// the given installation. Cache TTL = expires_at - 5min margin.
-//
-// The caller provides a JWT (mint with AppJWT) used only on cache miss.
+// InstallationToken returns a cached or freshly minted installation token.
+// Cache TTL is server-reported expires_at minus 5-minute safety margin.
 func (c *Client) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error) {
 	if v, ok := c.tokenCache.Load(installationID); ok {
 		ct := v.(cachedInstallationToken)

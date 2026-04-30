@@ -1,3 +1,5 @@
+// Package scheduler manages the dispatch of GitHub workflow jobs to Docker-based runners.
+// It handles job enqueueing, runner state coordination, and error recovery with replay logic.
 package scheduler
 
 import (
@@ -14,12 +16,12 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-// Launcher is the subset of *runner.Launcher dispatch depends on.
+// Launcher is the interface for launching runners; implemented by runner.Launcher.
 type Launcher interface {
 	Launch(ctx context.Context, spec runner.Spec) error
 }
 
-// GitHubClient is the subset of *github.Client dispatch calls.
+// GitHubClient provides GitHub API operations; implemented by github.Client.
 type GitHubClient interface {
 	AppJWT(pem []byte, appID int64) (string, error)
 	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
@@ -31,6 +33,7 @@ type GitHubClient interface {
 	WorkflowJob(ctx context.Context, installationToken, repoFullName string, jobID int64) (*github.WorkflowJobStatus, error)
 }
 
+// Scheduler manages the dispatch of GitHub workflow jobs to runners.
 type Scheduler struct {
 	cfg    *config.Config
 	store  store.Store
@@ -49,6 +52,7 @@ type Scheduler struct {
 	nowFn                   func() time.Time
 }
 
+// New creates a new Scheduler.
 func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *slog.Logger) *Scheduler {
 	return &Scheduler{
 		cfg:                  cfg,
@@ -72,8 +76,8 @@ func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *
 	}
 }
 
-// Enqueue is non-blocking: if the channel is full the job stays pending in
-// sqlite and the next replay picks it up.
+// Enqueue adds a job ID to the dispatch queue; non-blocking.
+// If queue is full, job remains pending in store for next replay.
 func (s *Scheduler) Enqueue(jobID int64) {
 	select {
 	case s.jobCh <- jobID:
@@ -82,16 +86,14 @@ func (s *Scheduler) Enqueue(jobID int64) {
 	}
 }
 
-// Run starts the scheduler loop. It blocks until ctx is cancelled.
-// For graceful shutdown with a separate drain window, use RunWithDrain.
+// Run starts the scheduler loop; blocks until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) error {
 	return s.RunWithDrain(ctx, ctx)
 }
 
-// RunWithDrain starts the scheduler loop with separate stop and drain
-// contexts. runCtx controls when the loop stops accepting new jobs;
-// drainCtx gives in-flight dispatches extra time to complete after
-// runCtx is cancelled. Pass the same context for both to get Run behaviour.
+// RunWithDrain starts the scheduler with separate stop and drain contexts.
+// runCtx stops accepting new jobs; drainCtx gives in-flight dispatches time to complete.
+// Pass the same context for both to get Run() behavior.
 func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)

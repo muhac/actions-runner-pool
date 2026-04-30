@@ -1,7 +1,6 @@
 package scheduler
 
-// WorkflowJobEvent is the subset of GitHub's workflow_job webhook payload
-// we care about. See https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_job
+// WorkflowJobEvent represents a GitHub workflow_job webhook payload.
 type WorkflowJobEvent struct {
 	Action       string       `json:"action"` // queued | in_progress | completed
 	WorkflowJob  WorkflowJob  `json:"workflow_job"`
@@ -9,6 +8,7 @@ type WorkflowJobEvent struct {
 	Installation Installation `json:"installation"`
 }
 
+// WorkflowJob represents a GitHub Actions workflow job.
 type WorkflowJob struct {
 	ID           int64    `json:"id"`
 	RunID        int64    `json:"run_id"`
@@ -22,6 +22,7 @@ type WorkflowJob struct {
 	RunnerName   string   `json:"runner_name"`
 }
 
+// Repository represents a GitHub repository.
 type Repository struct {
 	ID         int64  `json:"id"`
 	FullName   string `json:"full_name"`
@@ -30,6 +31,7 @@ type Repository struct {
 	Visibility string `json:"visibility"`
 }
 
+// Installation represents a GitHub App installation.
 type Installation struct {
 	ID int64 `json:"id"`
 }
