@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	metricJobStatuses    = []string{"pending", "dispatched", "in_progress", "completed"}
-	metricRunnerStatuses = []string{"starting", "idle", "busy", "finished"}
+	metricJobStatuses    = store.JobStatuses
+	metricRunnerStatuses = store.RunnerStatuses
 )
 
 type MetricsHandler struct {
@@ -99,8 +99,29 @@ func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, status := range metricJobStatuses {
 		ch <- prometheus.MustNewConstMetric(jobsTotalDesc, prometheus.GaugeValue, float64(summary.JobsByStatus[status]), status)
 	}
+	// Emit any statuses returned by the DB that are not in the known list,
+	// so new statuses are never silently dropped from metrics.
+	knownJob := make(map[string]struct{}, len(metricJobStatuses))
+	for _, s := range metricJobStatuses {
+		knownJob[s] = struct{}{}
+	}
+	for status, count := range summary.JobsByStatus {
+		if _, ok := knownJob[status]; !ok {
+			ch <- prometheus.MustNewConstMetric(jobsTotalDesc, prometheus.GaugeValue, float64(count), status)
+		}
+	}
+
 	for _, status := range metricRunnerStatuses {
 		ch <- prometheus.MustNewConstMetric(runnersTotalDesc, prometheus.GaugeValue, float64(summary.RunnersByStatus[status]), status)
+	}
+	knownRunner := make(map[string]struct{}, len(metricRunnerStatuses))
+	for _, s := range metricRunnerStatuses {
+		knownRunner[s] = struct{}{}
+	}
+	for status, count := range summary.RunnersByStatus {
+		if _, ok := knownRunner[status]; !ok {
+			ch <- prometheus.MustNewConstMetric(runnersTotalDesc, prometheus.GaugeValue, float64(count), status)
+		}
 	}
 
 	maxConcurrent := 0

@@ -48,6 +48,12 @@ type Job struct {
 	UpdatedAt    time.Time
 }
 
+// JobStatuses and RunnerStatuses enumerate all well-known status values.
+// They are used by the metrics collector to guarantee stable label cardinality
+// (zero-valued series are emitted for statuses absent from the DB).
+var JobStatuses = []string{"pending", "dispatched", "in_progress", "completed"}
+var RunnerStatuses = []string{"starting", "idle", "busy", "finished"}
+
 type JobListFilter struct {
 	Statuses []string
 	Repo     string
