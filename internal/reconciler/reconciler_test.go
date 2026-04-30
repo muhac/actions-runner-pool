@@ -162,7 +162,7 @@ func (f *fakeDocker) ForceRemove(ctx context.Context, name string) error {
 }
 
 func newRecon(st Store, dk Docker) *Reconciler {
-	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.period = 10 * time.Millisecond
 	r.grace = 5 * time.Minute
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
@@ -367,7 +367,7 @@ func TestRun_GitHubSweepDoesNotBlockDockerLoop(t *testing.T) {
 	dk := &fakeDocker{exists: map[string]bool{"gharp-live": true}}
 	ghBlock := make(chan struct{})
 	gh := &fakeGH{listBlock: ghBlock, runnersByRepo: map[string][]github.RepoRunner{"alice/repo": nil}}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.period = 10 * time.Millisecond
 	r.githubSweepPeriod = time.Hour
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
@@ -505,7 +505,7 @@ func TestReconcile_GitHubGhostSweep_DeletesUnknownRunners(t *testing.T) {
 			{ID: 14, Name: "gharp-7-busy", Status: "online", Busy: true},
 		},
 	}}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	r.sweepGitHubGhostRunners(context.Background())
 
@@ -524,7 +524,7 @@ func TestReconcile_GitHubGhostSweep_NoInstalledRepos_NoOp(t *testing.T) {
 	st := &fakeStore{appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")}}
 	dk := &fakeDocker{}
 	gh := &fakeGH{}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.sweepGitHubGhostRunners(context.Background())
 	if gh.jwtCalls != 0 || gh.instTokenCalls != 0 || gh.listCalls != 0 {
 		t.Fatalf("idle deployment burned API: jwt=%d inst=%d list=%d",
@@ -550,7 +550,7 @@ func TestReconcile_GitHubGhostSweep_IdleRepoWithGhost_Cleared(t *testing.T) {
 			{ID: 43, Name: "other-system-runner", Status: "online", Busy: false},
 		},
 	}}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.sweepGitHubGhostRunners(context.Background())
 	if len(gh.deleted) != 1 || gh.deleted[0] != (deletedRunner{"alice/repo", 42}) {
 		t.Fatalf("expected DELETE of gharp-stale-deadbeef from alice/repo, got %+v", gh.deleted)
@@ -574,7 +574,7 @@ func TestReconcile_GitHubGhostSweep_RechecksActiveRunnerBeforeDelete(t *testing.
 			{ID: 42, Name: "gharp-new-runner", Status: "online", Busy: false},
 		},
 	}}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.sweepGitHubGhostRunners(context.Background())
 	if len(gh.deleted) != 0 {
 		t.Fatalf("new active runner deleted after recheck: %+v", gh.deleted)
@@ -604,7 +604,7 @@ func TestReconcile_GitHubGhostSweep_TokenCachedPerInstallation(t *testing.T) {
 		"alice/r1": {{ID: 11, Name: "gharp-1-a", Status: "online"}},
 		"alice/r2": {{ID: 12, Name: "gharp-2-a", Status: "online"}},
 	}}
-	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, gh, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	r.sweepGitHubGhostRunners(context.Background())
 	if gh.instTokenCalls != 1 {
@@ -620,7 +620,7 @@ func TestReconcile_GitHubGhostSweep_TokenCachedPerInstallation(t *testing.T) {
 func TestReconcile_GitHubGhostSweep_NilGH_Disabled(t *testing.T) {
 	st := &fakeStore{}
 	dk := &fakeDocker{}
-	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", "")
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.sweepGitHubGhostRunners(context.Background()) // no panic
 }
 
@@ -634,7 +634,7 @@ func TestReconcile_GhostRunner_CleansWorkdir(t *testing.T) {
 		ContainerName: container, RunnerName: container, Status: "idle", StartedAt: time.Unix(1_699_990_000, 0),
 	}}}
 	dk := &fakeDocker{exists: map[string]bool{}}
-	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", root)
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", root, nil, 0)
 	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	r.Reconcile(context.Background())
 	if _, err := os.Stat(filepath.Join(root, container)); !errors.Is(err, os.ErrNotExist) {
@@ -669,7 +669,7 @@ func TestSweepOrphanWorkdirs_RemovesOnlyStaleUnclaimedDirs(t *testing.T) {
 	}
 
 	dk := &fakeDocker{exists: map[string]bool{"gharp-live-bbbb": true}}
-	r := New(&fakeStore{}, dk, nil, quietLog(), 1*time.Hour, "gharp-", root)
+	r := New(&fakeStore{}, dk, nil, quietLog(), 1*time.Hour, "gharp-", root, nil, 0)
 	r.nowFn = func() time.Time { return now }
 	r.workdirGrace = 5 * time.Minute
 	removed := r.sweepOrphanWorkdirs(context.Background())
@@ -688,4 +688,25 @@ func TestSweepOrphanWorkdirs_RemovesOnlyStaleUnclaimedDirs(t *testing.T) {
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("other prefix dir should remain: %v", err)
 	}
+}
+
+func TestRunMaintenanceCommand_Success(t *testing.T) {
+	r := New(&fakeStore{}, &fakeDocker{exists: map[string]bool{}}, nil, quietLog(),
+		1*time.Hour, "gharp-", "", []string{"true"}, time.Minute)
+	// should not panic or return error
+	r.runMaintenanceCommand(context.Background())
+}
+
+func TestRunMaintenanceCommand_Failure_NocrashService(t *testing.T) {
+	r := New(&fakeStore{}, &fakeDocker{exists: map[string]bool{}}, nil, quietLog(),
+		1*time.Hour, "gharp-", "", []string{"false"}, time.Minute)
+	// non-zero exit must not panic
+	r.runMaintenanceCommand(context.Background())
+}
+
+func TestRunMaintenanceCommand_Disabled_WhenNoCmd(t *testing.T) {
+	r := New(&fakeStore{}, &fakeDocker{exists: map[string]bool{}}, nil, quietLog(),
+		1*time.Hour, "gharp-", "", nil, time.Minute)
+	// maintenanceCmd empty: goroutine never starts, method should be safe to call directly too
+	r.runMaintenanceCommand(context.Background()) // should not panic (but it's a no-op when cmd is nil)
 }

@@ -38,6 +38,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -125,6 +126,11 @@ type Reconciler struct {
 	workdirRoot         string
 	workdirSweepPeriod  time.Duration
 	workdirGrace        time.Duration
+	// maintenanceCmd and maintenancePeriod drive the optional periodic
+	// user-supplied maintenance command (e.g. docker system prune).
+	// Both must be non-zero to enable the goroutine.
+	maintenanceCmd      []string
+	maintenancePeriod   time.Duration
 	nowFn               func() time.Time
 }
 
@@ -140,8 +146,10 @@ type Reconciler struct {
 // deployments that prefer to let GitHub auto-expire stale
 // registrations on its own). workdirRoot points to the host directory
 // where per-runner workdirs are stored as <workdirRoot>/<containerName>.
-// Empty disables filesystem cleanup.
-func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string) *Reconciler {
+// Empty disables filesystem cleanup. maintenanceCmd is an optional
+// argv (no shell) run every maintenancePeriod; either being zero
+// disables the maintenance goroutine.
+func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string, maintenanceCmd []string, maintenancePeriod time.Duration) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
 	}
@@ -169,6 +177,8 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 		workdirRoot:         workdirRoot,
 		workdirSweepPeriod:  5 * time.Minute,
 		workdirGrace:        5 * time.Minute,
+		maintenanceCmd:      maintenanceCmd,
+		maintenancePeriod:   maintenancePeriod,
 		nowFn:               time.Now,
 	}
 }
@@ -185,6 +195,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	}
 	if r.workdirRoot != "" {
 		go r.runWorkdirSweeper(ctx)
+	}
+	if len(r.maintenanceCmd) > 0 && r.maintenancePeriod > 0 {
+		go r.runMaintenanceSweeper(ctx)
 	}
 	t := time.NewTicker(r.period)
 	defer t.Stop()
@@ -563,4 +576,37 @@ func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName st
 		}
 	}
 	return false, nil
+}
+
+func (r *Reconciler) runMaintenanceSweeper(ctx context.Context) {
+	t := time.NewTicker(r.maintenancePeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.runMaintenanceCommand(ctx)
+		}
+	}
+}
+
+// runMaintenanceCommand executes maintenanceCmd as a subprocess. stdout
+// and stderr are captured and logged at Info on success, Warn on
+// non-zero exit. Errors are never fatal — a failing prune command
+// should not crash the service.
+func (r *Reconciler) runMaintenanceCommand(ctx context.Context) {
+	if len(r.maintenanceCmd) == 0 {
+		return
+	}
+	cmd := exec.CommandContext(ctx, r.maintenanceCmd[0], r.maintenanceCmd[1:]...) //nolint:gosec // user-supplied, intentional
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+	if err != nil {
+		r.log.Warn("reconciler: maintenance command failed",
+			"cmd", r.maintenanceCmd, "err", err, "output", output)
+		return
+	}
+	r.log.Info("reconciler: maintenance command succeeded",
+		"cmd", r.maintenanceCmd, "output", output)
 }
