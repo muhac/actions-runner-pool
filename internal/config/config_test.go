@@ -48,6 +48,12 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		if c.RunnerWorkdirRoot != "" {
 			t.Errorf("RunnerWorkdirRoot default = %q, want empty", c.RunnerWorkdirRoot)
 		}
+		if len(c.MaintenanceCommand) != 0 {
+			t.Errorf("MaintenanceCommand default = %v, want nil", c.MaintenanceCommand)
+		}
+		if c.MaintenanceInterval != 0 {
+			t.Errorf("MaintenanceInterval default = %v, want 0", c.MaintenanceInterval)
+		}
 	})
 }
 
@@ -470,4 +476,57 @@ func jsonStringArray(t *testing.T, parts []string) string {
 	}
 	b.WriteByte(']')
 	return b.String()
+}
+
+func TestLoad_MaintenanceCommand_ValidBothSet(t *testing.T) {
+	cmd := jsonStringArray(t, []string{"docker", "system", "prune", "-f"})
+	withEnv(t, map[string]string{
+		"BASE_URL":              "https://example.test",
+		"MAINTENANCE_COMMAND":   cmd,
+		"MAINTENANCE_INTERVAL":  "6h",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !equalStrings(c.MaintenanceCommand, []string{"docker", "system", "prune", "-f"}) {
+			t.Errorf("MaintenanceCommand = %v", c.MaintenanceCommand)
+		}
+		if c.MaintenanceInterval != 6*time.Hour {
+			t.Errorf("MaintenanceInterval = %v, want 6h", c.MaintenanceInterval)
+		}
+	})
+}
+
+func TestLoad_MaintenanceCommand_InvalidJSON(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":            "https://example.test",
+		"MAINTENANCE_COMMAND": "not-json",
+	}, func() {
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAINTENANCE_COMMAND") {
+			t.Fatalf("want MAINTENANCE_COMMAND parse error, got: %v", err)
+		}
+	})
+}
+
+func TestLoad_MaintenanceCommand_OnlyCommandNoInterval(t *testing.T) {
+	cmd := jsonStringArray(t, []string{"echo", "clean"})
+	withEnv(t, map[string]string{
+		"BASE_URL":            "https://example.test",
+		"MAINTENANCE_COMMAND": cmd,
+		// MAINTENANCE_INTERVAL intentionally absent
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load should succeed even with partial config: %v", err)
+		}
+		// command stored but interval zero — both must be set to enable
+		if len(c.MaintenanceCommand) == 0 {
+			t.Errorf("MaintenanceCommand should be stored even when interval missing")
+		}
+		if c.MaintenanceInterval != 0 {
+			t.Errorf("MaintenanceInterval should default to 0, got %v", c.MaintenanceInterval)
+		}
+	})
 }
