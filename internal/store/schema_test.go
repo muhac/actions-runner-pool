@@ -67,6 +67,7 @@ func TestSchema_AppliesAndIdempotent(t *testing.T) {
 		"idx_jobs_repo_updated",
 		"idx_jobs_run_id",
 		"idx_jobs_status",
+		"idx_runners_repo",
 		"idx_runners_runner_name",
 		"idx_runners_status",
 	}

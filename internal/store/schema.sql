@@ -58,4 +58,5 @@ CREATE TABLE IF NOT EXISTS runners (
   finished_at    DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_runners_status ON runners(status);
+CREATE INDEX IF NOT EXISTS idx_runners_repo ON runners(repo);
 CREATE INDEX IF NOT EXISTS idx_runners_runner_name ON runners(runner_name);
