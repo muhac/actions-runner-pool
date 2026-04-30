@@ -82,10 +82,16 @@ func (s *Scheduler) Enqueue(jobID int64) {
 	}
 }
 
+// Run starts the scheduler loop. It blocks until ctx is cancelled.
+// For graceful shutdown with a separate drain window, use RunWithDrain.
 func (s *Scheduler) Run(ctx context.Context) error {
 	return s.RunWithDrain(ctx, ctx)
 }
 
+// RunWithDrain starts the scheduler loop with separate stop and drain
+// contexts. runCtx controls when the loop stops accepting new jobs;
+// drainCtx gives in-flight dispatches extra time to complete after
+// runCtx is cancelled. Pass the same context for both to get Run behaviour.
 func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)

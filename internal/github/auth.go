@@ -31,8 +31,9 @@ func (c *Client) AppJWT(pem []byte, appID int64) (string, error) {
 	return signed, nil
 }
 
-// installationTokenCache holds installation tokens with their effective expiry
-// (= server-reported expires_at minus a 5-minute safety margin).
+// cachedInstallationToken is a single entry in the token cache: the raw
+// token string and its effective expiry (server-reported expires_at minus
+// a 5-minute safety margin).
 type cachedInstallationToken struct {
 	token string
 	exp   time.Time

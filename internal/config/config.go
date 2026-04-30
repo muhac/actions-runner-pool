@@ -43,10 +43,11 @@ type Config struct {
 	// register but never get assigned a job — without this they hold a
 	// cap slot until the user notices.
 	RunnerMaxLifetime time.Duration
-	// ShutdownDrainTimeout is the maximum time the scheduler is allowed
-	// to finish an in-flight dispatch after SIGTERM before it is forcibly
-	// cancelled. Should be at least as long as your slowest expected
-	// runner launch (image pull + container start + retry budget).
+	// ShutdownDrainTimeout is the maximum time allowed for graceful
+	// shutdown after SIGTERM: the scheduler gets this long to finish any
+	// in-flight dispatch, and the HTTP server gets this long to drain
+	// open connections. Should be at least as long as your slowest
+	// expected runner launch (image pull + container start + retry budget).
 	ShutdownDrainTimeout time.Duration
 	DockerHost           string
 	// RunnerWorkdirRoot is the host path containing per-runner workdirs,
