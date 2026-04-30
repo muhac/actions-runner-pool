@@ -707,6 +707,8 @@ func TestIntegration_SIGTERM_DrainsInflightDispatch(t *testing.T) {
 		waited = true
 		t.Fatalf("process exited before inflight dispatch drained: %v", err)
 	case <-time.After(200 * time.Millisecond):
+		// The runner script sleeps for 1s, so the process must still be alive
+		// at 200ms — well within the drain window.
 	}
 
 	if err := waitForFile(finishedPath, 5*time.Second); err != nil {
