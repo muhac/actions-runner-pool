@@ -66,12 +66,9 @@ func nameSuffix(baseURL string) string {
 	return hex.EncodeToString(h[:])[:6]
 }
 
-// ConvertCode exchanges the temporary `code` from the manifest flow callback
-// for the full App credentials. POST /app-manifests/{code}/conversions.
-//
-// The single-use code IS the credential; no auth header is sent. Code expires
-// in ~10 min so callers must invoke immediately and not retry.
 // ConvertCode exchanges a temporary installation code for App credentials.
+// Calls POST /app-manifests/{code}/conversions with no auth header.
+// The code is single-use and expires in ~10 minutes.
 func (c *Client) ConvertCode(ctx context.Context, code string) (*AppCredentials, error) {
 	endpoint := fmt.Sprintf("%s/app-manifests/%s/conversions", c.cfg.GitHubAPIBase, url.PathEscape(code))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
