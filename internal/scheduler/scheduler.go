@@ -86,9 +86,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	return s.RunWithDrain(ctx, ctx)
 }
 
-// RunWithDrain runs the scheduler until runCtx is cancelled. If a dispatch is
-// already in progress when runCtx is cancelled, it is allowed to complete using
-// drainCtx as its deadline. Call Run to use a single context for both.
 func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)
@@ -255,7 +252,7 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
 		confirmed, aborted := confirm404(drainCtx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
 		if aborted {
-			// drainCtx cancelled mid-confirm — process is shutting down.
+			// ctx cancelled mid-confirm — process is shutting down.
 			// Returning here avoids InsertRunner+Launch with a dying
 			// ctx, which would leave a half-created orphan that the
 			// orphan sweep only catches after the grace window.
@@ -273,23 +270,11 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
 		}
 		return
-	case live.Status == "completed":
-		conclusion := live.Conclusion
-		if conclusion == "" {
-			conclusion = "cancelled"
-		}
-		s.log.Info("dispatch: GitHub reports job completed; marking terminal",
-			"job_id", jobID, "github_conclusion", conclusion)
-		if completed, err := s.store.MarkJobCompleted(drainCtx, jobID, conclusion); err != nil {
-			s.log.Error("dispatch: MarkJobCompleted after GitHub completed failed", "job_id", jobID, "err", err)
-		} else if !completed {
-			s.log.Info("dispatch: completed update was a no-op", "job_id", jobID)
-		}
-		return
 	case live.Status != "queued":
 		// Most common case: the job is already in_progress (another runner
-		// won). The launch is wasted work — abort before InsertRunner so we
-		// don't even create a row to clean up.
+		// won) or completed (cancelled / finished). Either way the launch
+		// is wasted work — abort before InsertRunner so we don't even
+		// create a row to clean up.
 		s.log.Info("dispatch: GitHub reports job no longer queued; aborting launch",
 			"job_id", jobID, "github_status", live.Status, "github_conclusion", live.Conclusion)
 		return
