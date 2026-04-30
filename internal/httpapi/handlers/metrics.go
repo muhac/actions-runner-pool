@@ -70,12 +70,6 @@ var (
 		[]string{"status"},
 		nil,
 	)
-	activeRunnersDesc = prometheus.NewDesc(
-		"gharp_active_runners",
-		"Current number of active runners (starting + idle + busy).",
-		nil,
-		nil,
-	)
 	maxConcurrentRunnersDesc = prometheus.NewDesc(
 		"gharp_max_concurrent_runners",
 		"Configured maximum number of concurrent runners.",
@@ -87,7 +81,6 @@ var (
 func (c *summaryCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- jobsTotalDesc
 	ch <- runnersTotalDesc
-	ch <- activeRunnersDesc
 	ch <- maxConcurrentRunnersDesc
 }
 
@@ -114,6 +107,5 @@ func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	if c.cfg != nil {
 		maxConcurrent = c.cfg.MaxConcurrentRunners
 	}
-	ch <- prometheus.MustNewConstMetric(activeRunnersDesc, prometheus.GaugeValue, float64(summary.ActiveRunners))
 	ch <- prometheus.MustNewConstMetric(maxConcurrentRunnersDesc, prometheus.GaugeValue, float64(maxConcurrent))
 }

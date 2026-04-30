@@ -15,7 +15,6 @@ func TestMetrics_OpenWhenAdminTokenEmpty(t *testing.T) {
 		summary: &store.Summary{
 			JobsByStatus:    map[string]int64{"pending": 2, "completed": 3},
 			RunnersByStatus: map[string]int64{"starting": 1, "busy": 2},
-			ActiveRunners:   3,
 		},
 	}
 	h := NewMetricsHandler(&config.Config{MaxConcurrentRunners: 4}, st, nil)
@@ -33,7 +32,6 @@ func TestMetrics_OpenWhenAdminTokenEmpty(t *testing.T) {
 		`gharp_jobs_total{status="completed"} 3`,
 		`gharp_runners_total{status="starting"} 1`,
 		`gharp_runners_total{status="busy"} 2`,
-		`gharp_active_runners 3`,
 		`gharp_max_concurrent_runners 4`,
 	} {
 		if !strings.Contains(body, want) {
@@ -42,6 +40,9 @@ func TestMetrics_OpenWhenAdminTokenEmpty(t *testing.T) {
 	}
 	if strings.Contains(body, "gharp_pending_jobs") {
 		t.Fatalf("gharp_pending_jobs should not be present (redundant with gharp_jobs_total{status=pending})")
+	}
+	if strings.Contains(body, "gharp_active_runners") {
+		t.Fatalf("gharp_active_runners should not be present (redundant with sum(gharp_runners_total{status=~starting|idle|busy}))")
 	}
 }
 

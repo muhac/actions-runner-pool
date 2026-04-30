@@ -418,11 +418,9 @@ func (s *SQLite) Summary(ctx context.Context) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	active := runners["starting"] + runners["idle"] + runners["busy"]
 	return &Summary{
 		JobsByStatus:    jobs,
 		RunnersByStatus: runners,
-		ActiveRunners:   active,
 	}, nil
 }
 

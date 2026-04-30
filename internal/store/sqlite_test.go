@@ -612,9 +612,6 @@ func TestSummary_CountsJobsAndRunners(t *testing.T) {
 	if got.RunnersByStatus["starting"] != 1 || got.RunnersByStatus["busy"] != 1 || got.RunnersByStatus["finished"] != 1 {
 		t.Fatalf("runners by status = %+v", got.RunnersByStatus)
 	}
-	if got.ActiveRunners != 2 {
-		t.Fatalf("active runners = %d, want 2", got.ActiveRunners)
-	}
 }
 
 func TestRetryJobIfCompleted(t *testing.T) {

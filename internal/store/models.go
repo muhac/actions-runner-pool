@@ -57,7 +57,6 @@ type JobListFilter struct {
 type Summary struct {
 	JobsByStatus    map[string]int64
 	RunnersByStatus map[string]int64
-	ActiveRunners   int64
 }
 
 type Runner struct {
