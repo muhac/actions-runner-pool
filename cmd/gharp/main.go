@@ -73,8 +73,8 @@ func run() error {
 
 	go func() {
 		<-signalCtx.Done()
-		log.Info("shutdown signal received; draining scheduler", "timeout", 30*time.Second)
-		timer := time.NewTimer(30 * time.Second)
+		log.Info("shutdown signal received; draining scheduler", "timeout", cfg.ShutdownDrainTimeout)
+		timer := time.NewTimer(cfg.ShutdownDrainTimeout)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
