@@ -86,6 +86,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	return s.RunWithDrain(ctx, ctx)
 }
 
+// RunWithDrain runs the scheduler until runCtx is cancelled. If a dispatch is
+// already in progress when runCtx is cancelled, it is allowed to complete using
+// drainCtx as its deadline. Call Run to use a single context for both.
 func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)
