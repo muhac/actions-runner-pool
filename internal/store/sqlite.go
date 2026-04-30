@@ -424,16 +424,17 @@ func (s *SQLite) Summary(ctx context.Context) (*Summary, error) {
 	}, nil
 }
 
-var allowedStatusTables = map[string]struct{}{
-	"jobs":    {},
-	"runners": {},
-}
-
 func countByStatus(ctx context.Context, db *sql.DB, table string) (map[string]int64, error) {
-	if _, ok := allowedStatusTables[table]; !ok {
+	var q string
+	switch table {
+	case "jobs":
+		q = `SELECT status, count(*) FROM jobs GROUP BY status`
+	case "runners":
+		q = `SELECT status, count(*) FROM runners GROUP BY status`
+	default:
 		return nil, fmt.Errorf("countByStatus: unknown table %q", table)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM `+table+` GROUP BY status`)
+	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
