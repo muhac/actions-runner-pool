@@ -180,6 +180,12 @@ func Load() (*Config, error) {
 		slog.Default().Warn("MAINTENANCE_INTERVAL is set but MAINTENANCE_COMMAND is empty — periodic maintenance disabled")
 	}
 
+	if c.RunnerWorkdirRoot != "" {
+		if err := os.MkdirAll(c.RunnerWorkdirRoot, 0o700); err != nil {
+			return nil, fmt.Errorf("RUNNER_WORKDIR_ROOT %q is not accessible: %w", c.RunnerWorkdirRoot, err)
+		}
+	}
+
 	return c, nil
 }
 
