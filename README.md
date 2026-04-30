@@ -17,6 +17,19 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
 
+**Recommended — Docker Compose** (includes workdir cleanup, Docker-in-Docker socket
+forwarding, and `ADMIN_TOKEN` support out of the box):
+
+```bash
+# copy docker-compose.yml from this repo, then:
+BASE_URL=https://gharp.example.com docker compose up -d
+```
+
+See [`docker-compose.yml`](docker-compose.yml) for the full reference configuration
+(custom `RUNNER_COMMAND`, workdir volume, `ADMIN_TOKEN`, etc.).
+
+**Minimal `docker run`** (no workdir mounting, all other options at defaults):
+
 ```bash
 docker run -d --name gharp \
   -p 8080:8080 \
@@ -27,17 +40,8 @@ docker run -d --name gharp \
 ```
 
 `BASE_URL` must be a public HTTPS URL GitHub can reach, terminating at
-the container's port 8080 (above mapped to the host's 8080). If you
-customise `RUNNER_COMMAND` to mount a host workdir (e.g.
-`-v /tmp/gharp/{{.ContainerName}}:/_work`), also add
-`-e RUNNER_WORKDIR_ROOT=/tmp/gharp` and `-v /tmp/gharp:/tmp/gharp` so
-gharp can clean up those directories automatically. See
+the container's port 8080 (above mapped to the host's 8080). See
 [`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
-
-> 🔐 **Secure the admin API.** The `/jobs`, `/jobs/{id}/retry`,
-> `/jobs/{id}/cancel`, and `/metrics` endpoints are open by default.
-> Set `-e ADMIN_TOKEN=<secret>` to require
-> `Authorization: Bearer <secret>` on those routes.
 
 ### 2. Create the GitHub App
 
