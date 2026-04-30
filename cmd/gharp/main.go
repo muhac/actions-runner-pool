@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -55,18 +56,36 @@ func run() error {
 	rn := runner.NewLauncher(cfg)
 	sch := scheduler.New(cfg, st, gh, rn, log)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	drainCtx, drainCancel := context.WithCancel(context.Background())
+	defer drainCancel()
+
+	var schedulerWG sync.WaitGroup
+	schedulerWG.Add(1)
+	go func() {
+		defer schedulerWG.Done()
+		if err := sch.RunWithDrain(signalCtx, drainCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("scheduler stopped", "err", err)
+		}
+	}()
 
 	go func() {
-		if err := sch.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Error("scheduler stopped", "err", err)
+		<-signalCtx.Done()
+		log.Info("shutdown signal received; draining scheduler", "timeout", 30*time.Second)
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			drainCancel()
+		case <-drainCtx.Done():
 		}
 	}()
 
 	rec := reconciler.New(st, reconciler.NewExecDocker(), gh, log, cfg.RunnerMaxLifetime, cfg.RunnerNamePrefix)
 	go func() {
-		if err := rec.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := rec.Run(signalCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("reconciler stopped", "err", err)
 		}
 	}()
@@ -78,7 +97,7 @@ func run() error {
 	}
 
 	go func() {
-		<-ctx.Done()
+		<-signalCtx.Done()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -87,6 +106,10 @@ func run() error {
 	log.Info("gharp listening", "addr", srv.Addr, "base_url", cfg.BaseURL)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	if signalCtx.Err() != nil {
+		schedulerWG.Wait()
+		log.Info("scheduler drain completed")
 	}
 	return nil
 }
