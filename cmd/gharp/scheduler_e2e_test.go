@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -600,7 +601,7 @@ func waitForFile(path string, timeout time.Duration) error {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return os.ErrNotExist
+	return fmt.Errorf("timed out after %s waiting for %s", timeout, path)
 }
 
 // --- additional integration scenarios ---------------------------------------
