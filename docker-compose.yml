@@ -11,6 +11,7 @@ services:
     # RUNNER_COMMAND uses YAML `>-` so the multi-line source folds to one
     # line at runtime; .env can't hold multi-line values.
     environment:
+      RUNNER_WORKDIR_ROOT: /tmp/gharp
       RUNNER_COMMAND: >-
         [
           "docker","run","--rm","-d",
