@@ -12,7 +12,7 @@
 Non-goals (for v1):
 - Multi-node deployment.
 - gRPC / public API.
-- Web dashboard beyond the one-shot setup page.
+- Built-in dashboard for queue status, recent jobs, and basic controls.
 - Kubernetes integration (ARC already owns that space).
 
 ## High-level flow
@@ -559,9 +559,10 @@ Concrete v1.x work, ordered by impact on correctness:
 6. **Per-installation cap.** Current `MAX_CONCURRENT_RUNNERS` is
    global. Multi-tenant deployments need per-installation quotas to
    stop one repo from monopolizing slots.
-7. **Ops endpoints / dashboard.** `/healthz`, `/metrics`,
-   `/jobs?status=...`, and job retry/cancel controls exist; eventually
-   add a small dashboard beyond the one-shot `/setup` page.
+7. **Ops endpoints / dashboard.** **Shipped:** `/healthz`, `/stats`,
+   `/metrics`, `/jobs?status=...`, job retry/cancel controls, and a
+   built-in dashboard at `/`. The dashboard is embedded HTML/CSS/JS,
+   so gharp still has no frontend build chain.
 8. **Public-repo guard.** **Shipped:** queued `workflow_job` payloads
    with `repository.private=false` are dropped by default with a
    warning, since self-hosted runners on public repos = remote code

@@ -219,12 +219,19 @@ change any of them, delete the App on GitHub, wipe the gharp volume
 
 ### Ops APIs
 
+- `GET /` — serves the built-in dashboard for status, recent jobs, filters, and retry/cancel controls.
 - `GET /healthz` — returns `ok`.
 - `GET /jobs` — returns recent jobs as JSON.
 - `GET /jobs/{job_id}` — returns full job detail, including stored webhook payload.
 - `POST /jobs/{job_id}/retry` — retries a completed job locally (status resets to pending and is enqueued).
 - `POST /jobs/{job_id}/cancel` — cancels a pending/dispatched job locally.
+- `GET /stats` — returns dashboard-friendly JSON counts for jobs, runners, and capacity.
 - `GET /metrics` — returns Prometheus text-format gauges for current job and runner counts.
+
+The dashboard is a self-contained HTML/CSS/JS page served by gharp. It
+loads `/stats` and `/jobs` from the browser, stores an entered
+`ADMIN_TOKEN` in `sessionStorage`, and uses the same retry/cancel APIs
+as curl clients.
 
 `/jobs` supports query params:
 
@@ -259,16 +266,25 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://localhost:8080/jobs/123456789/cancel"
 
+# Dashboard stats JSON
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/stats"
+
 # Prometheus metrics
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://localhost:8080/metrics"
 ```
+
+`/stats` exposes JSON shaped for the built-in dashboard:
+`jobs` and `runners` maps keyed by status, plus `capacity` with
+`max_concurrent_runners`, `active_runners`, and `available_slots`.
 
 `/metrics` exposes low-cardinality current-state gauges:
 `gharp_jobs_total{status}`, `gharp_runners_total{status}`,
 and `gharp_max_concurrent_runners`.
 Use `gharp_jobs_total{status="pending"}` as the canonical pending-jobs signal,
 and `sum(gharp_runners_total{status=~"starting|idle|busy"})` for active runners.
+Keep `/metrics` for Prometheus; use `/stats` for UI and JSON clients.
 
 ### Logs
 
