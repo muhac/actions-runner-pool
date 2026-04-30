@@ -35,11 +35,13 @@ func TestMetrics_OpenWhenAdminTokenEmpty(t *testing.T) {
 		`gharp_runners_total{status="busy"} 2`,
 		`gharp_active_runners 3`,
 		`gharp_max_concurrent_runners 4`,
-		`gharp_pending_jobs 2`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "gharp_pending_jobs") {
+		t.Fatalf("gharp_pending_jobs should not be present (redundant with gharp_jobs_total{status=pending})")
 	}
 }
 

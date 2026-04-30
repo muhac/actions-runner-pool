@@ -75,12 +75,6 @@ var (
 		nil,
 		nil,
 	)
-	pendingJobsDesc = prometheus.NewDesc(
-		"gharp_pending_jobs",
-		"Current number of pending jobs.",
-		nil,
-		nil,
-	)
 )
 
 func (c *summaryCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -88,7 +82,6 @@ func (c *summaryCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- runnersTotalDesc
 	ch <- activeRunnersDesc
 	ch <- maxConcurrentRunnersDesc
-	ch <- pendingJobsDesc
 }
 
 func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
@@ -115,5 +108,4 @@ func (c *summaryCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(activeRunnersDesc, prometheus.GaugeValue, float64(summary.ActiveRunners))
 	ch <- prometheus.MustNewConstMetric(maxConcurrentRunnersDesc, prometheus.GaugeValue, float64(maxConcurrent))
-	ch <- prometheus.MustNewConstMetric(pendingJobsDesc, prometheus.GaugeValue, float64(summary.JobsByStatus["pending"]))
 }

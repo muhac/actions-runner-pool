@@ -266,8 +266,8 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 `/metrics` exposes low-cardinality current-state gauges:
 `gharp_jobs_total{status}`, `gharp_runners_total{status}`,
-`gharp_active_runners`, `gharp_max_concurrent_runners`, and
-`gharp_pending_jobs`.
+`gharp_active_runners`, and `gharp_max_concurrent_runners`.
+Use `gharp_jobs_total{status="pending"}` as the canonical pending-jobs signal.
 
 ### Logs
 
