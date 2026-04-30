@@ -14,6 +14,9 @@ import (
 func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *scheduler.Scheduler, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
+	dashboard := &handlers.DashboardHandler{Log: log}
+	mux.HandleFunc("GET /", dashboard.Get)
+
 	mux.HandleFunc("GET /healthz", handlers.Health)
 
 	setup := &handlers.SetupHandler{Cfg: cfg, Store: st, Log: log}

@@ -20,6 +20,7 @@ import (
 var templatesFS embed.FS
 
 var (
+	dashboardTmpl = template.Must(template.ParseFS(templatesFS, "templates/dashboard.html"))
 	setupTmpl     = template.Must(template.ParseFS(templatesFS, "templates/setup.html"))
 	setupDoneTmpl = template.Must(template.ParseFS(templatesFS, "templates/setup_done.html"))
 )

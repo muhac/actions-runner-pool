@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gharp · Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --text: #1f2328;
+      --muted: #656d76;
+      --border: #d0d7de;
+      --border-strong: #afb8c1;
+      --accent: #0969da;
+      --accent-soft: #ddf4ff;
+      --danger: #cf222e;
+      --danger-soft: #ffebe9;
+      --success: #1a7f37;
+      --success-soft: #dafbe1;
+      --warning: #9a6700;
+      --warning-soft: #fff8c5;
+      --neutral-soft: #f6f8fa;
+      --shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      min-height: 34px;
+      padding: 0 12px;
+    }
+
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+    input, select {
+      min-height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 10px;
+    }
+
+    input:focus, select:focus, button:focus {
+      outline: 2px solid rgba(9, 105, 218, 0.22);
+      outline-offset: 1px;
+    }
+
+    .shell {
+      width: min(1220px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .last-updated {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .auth-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .auth-panel[hidden], .banner[hidden] { display: none; }
+
+    .banner {
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      border-color: #f0b8b8;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card {
+      padding: 14px;
+      min-height: 96px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      margin-top: 8px;
+      font-size: 30px;
+      font-weight: 720;
+      line-height: 1;
+    }
+
+    .stat-note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .capacity {
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .capacity-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .capacity-track {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--neutral-soft);
+      border: 1px solid var(--border);
+    }
+
+    .capacity-fill {
+      width: 0%;
+      height: 100%;
+      background: var(--success);
+      transition: width 150ms ease, background 150ms ease;
+    }
+
+    .capacity-fill.warn { background: var(--warning); }
+    .capacity-fill.full { background: var(--danger); }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) 120px auto;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .status-checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 34px;
+      align-items: center;
+    }
+
+    .status-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--neutral-soft);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .status-check input {
+      min-height: auto;
+      margin: 0;
+      padding: 0;
+    }
+
+    .table-panel {
+      overflow: hidden;
+    }
+
+    .table-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .table-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .table-count {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      background: var(--neutral-soft);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    tbody tr:hover {
+      background: #fbfcfd;
+    }
+
+    .main-cell {
+      max-width: 260px;
+      white-space: normal;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--neutral-soft);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .badge.pending { border-color: #d4a72c; background: var(--warning-soft); color: var(--warning); }
+    .badge.dispatched { border-color: #54aeff; background: var(--accent-soft); color: var(--accent); }
+    .badge.in_progress { border-color: #4ac26b; background: var(--success-soft); color: var(--success); }
+    .badge.completed { border-color: var(--border); background: var(--neutral-soft); color: var(--muted); }
+    .badge.bad { border-color: #ff8182; background: var(--danger-soft); color: var(--danger); }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .empty {
+      padding: 32px 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .shell { padding: 16px; }
+      .topbar { display: block; }
+      .top-actions { justify-content: flex-start; margin-top: 12px; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toolbar { grid-template-columns: 1fr; }
+      .auth-panel { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main id="app" class="shell">
+    <div class="topbar">
+      <div>
+        <h1>gharp</h1>
+        <div class="subtitle">GitHub Actions runner autoscaler dashboard</div>
+      </div>
+      <div class="top-actions">
+        <span id="lastUpdated" class="last-updated">Not refreshed yet</span>
+        <button id="tokenButton" type="button">Token</button>
+        <button id="refreshButton" type="button">Refresh</button>
+      </div>
+    </div>
+
+    <section id="authPanel" class="panel auth-panel" hidden>
+      <input id="tokenInput" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
+      <button id="saveTokenButton" type="button">Save token</button>
+      <button id="clearTokenButton" type="button">Clear</button>
+    </section>
+
+    <section id="errorBanner" class="panel banner" hidden></section>
+
+    <section class="stats-grid" aria-label="Current status">
+      <div class="panel stat-card">
+        <div class="stat-label">Pending</div>
+        <div id="statPending" class="stat-value">0</div>
+        <div class="stat-note">Waiting for runners</div>
+      </div>
+      <div class="panel stat-card">
+        <div class="stat-label">Dispatched</div>
+        <div id="statDispatched" class="stat-value">0</div>
+        <div class="stat-note">Runner launched</div>
+      </div>
+      <div class="panel stat-card">
+        <div class="stat-label">In progress</div>
+        <div id="statInProgress" class="stat-value">0</div>
+        <div class="stat-note">Bound to runner</div>
+      </div>
+      <div class="panel stat-card">
+        <div class="stat-label">Completed</div>
+        <div id="statCompleted" class="stat-value">0</div>
+        <div class="stat-note">Terminal jobs</div>
+      </div>
+      <div class="panel stat-card">
+        <div class="stat-label">Active runners</div>
+        <div id="statActive" class="stat-value">0</div>
+        <div class="stat-note">Starting, idle, busy</div>
+      </div>
+      <div class="panel stat-card">
+        <div class="stat-label">Available slots</div>
+        <div id="statAvailable" class="stat-value">0</div>
+        <div id="capacityNote" class="stat-note">Capacity unknown</div>
+      </div>
+    </section>
+
+    <section class="panel capacity">
+      <div class="capacity-head">
+        <strong>Runner capacity</strong>
+        <span id="capacityText">0 / 0 active</span>
+      </div>
+      <div class="capacity-track" aria-hidden="true">
+        <div id="capacityFill" class="capacity-fill"></div>
+      </div>
+    </section>
+
+    <section class="panel toolbar" aria-label="Job filters">
+      <div class="field">
+        <label>Status</label>
+        <div class="status-checks">
+          <label class="status-check"><input type="checkbox" name="status" value="pending"> pending</label>
+          <label class="status-check"><input type="checkbox" name="status" value="dispatched"> dispatched</label>
+          <label class="status-check"><input type="checkbox" name="status" value="in_progress"> in progress</label>
+          <label class="status-check"><input type="checkbox" name="status" value="completed"> completed</label>
+        </div>
+      </div>
+      <div class="field">
+        <label for="repoInput">Repo</label>
+        <input id="repoInput" type="text" placeholder="owner/name">
+      </div>
+      <div class="field">
+        <label for="limitInput">Limit</label>
+        <select id="limitInput">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="250">250</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <button id="applyFiltersButton" type="button">Apply</button>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="table-head">
+        <div class="table-title">Recent jobs</div>
+        <div id="tableCount" class="table-count">0 jobs</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Repo</th>
+              <th>Job</th>
+              <th>Workflow</th>
+              <th>Run</th>
+              <th>Runner</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="jobsBody"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty" hidden>No jobs match the current filters.</div>
+    </section>
+  </main>
+
+  <script>
+    const tokenKey = "gharp.adminToken";
+    const refreshMs = 10000;
+    let refreshTimer = null;
+    let isLoading = false;
+
+    const el = {
+      authPanel: document.getElementById("authPanel"),
+      tokenInput: document.getElementById("tokenInput"),
+      saveTokenButton: document.getElementById("saveTokenButton"),
+      clearTokenButton: document.getElementById("clearTokenButton"),
+      tokenButton: document.getElementById("tokenButton"),
+      refreshButton: document.getElementById("refreshButton"),
+      applyFiltersButton: document.getElementById("applyFiltersButton"),
+      errorBanner: document.getElementById("errorBanner"),
+      lastUpdated: document.getElementById("lastUpdated"),
+      statPending: document.getElementById("statPending"),
+      statDispatched: document.getElementById("statDispatched"),
+      statInProgress: document.getElementById("statInProgress"),
+      statCompleted: document.getElementById("statCompleted"),
+      statActive: document.getElementById("statActive"),
+      statAvailable: document.getElementById("statAvailable"),
+      capacityNote: document.getElementById("capacityNote"),
+      capacityText: document.getElementById("capacityText"),
+      capacityFill: document.getElementById("capacityFill"),
+      repoInput: document.getElementById("repoInput"),
+      limitInput: document.getElementById("limitInput"),
+      jobsBody: document.getElementById("jobsBody"),
+      tableCount: document.getElementById("tableCount"),
+      emptyState: document.getElementById("emptyState")
+    };
+
+    function getToken() {
+      return sessionStorage.getItem(tokenKey) || "";
+    }
+
+    function setToken(token) {
+      if (token) {
+        sessionStorage.setItem(tokenKey, token);
+      } else {
+        sessionStorage.removeItem(tokenKey);
+      }
+    }
+
+    async function apiFetch(path, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const token = getToken();
+      if (token) {
+        headers.set("Authorization", "Bearer " + token);
+      }
+      const res = await fetch(path, { ...options, headers });
+      if (res.status === 401) {
+        showAuth();
+        throw new Error("ADMIN_TOKEN required");
+      }
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(body.trim() || res.statusText);
+      }
+      const contentType = res.headers.get("Content-Type") || "";
+      if (contentType.includes("application/json")) {
+        return await res.json();
+      }
+      return await res.text();
+    }
+
+    function showAuth() {
+      el.authPanel.hidden = false;
+      el.tokenInput.value = getToken();
+      el.tokenInput.focus();
+    }
+
+    function showError(message) {
+      el.errorBanner.textContent = message;
+      el.errorBanner.hidden = !message;
+    }
+
+    function buildJobsPath() {
+      const params = new URLSearchParams();
+      const statuses = [...document.querySelectorAll("input[name=status]:checked")].map(input => input.value);
+      for (const status of statuses) {
+        params.append("status", status);
+      }
+      const repo = el.repoInput.value.trim();
+      if (repo) {
+        params.set("repo", repo);
+      }
+      params.set("limit", el.limitInput.value || "50");
+      return "/jobs?" + params.toString();
+    }
+
+    async function refresh() {
+      if (isLoading) {
+        return;
+      }
+      isLoading = true;
+      el.refreshButton.disabled = true;
+      showError("");
+      try {
+        const [stats, jobs] = await Promise.all([
+          apiFetch("/stats"),
+          apiFetch(buildJobsPath())
+        ]);
+        renderStats(stats);
+        renderJobs(jobs);
+        const now = new Date();
+        el.lastUpdated.textContent = "Updated " + now.toLocaleTimeString();
+        el.lastUpdated.title = now.toISOString();
+      } catch (err) {
+        showError(err.message || "Request failed");
+      } finally {
+        isLoading = false;
+        el.refreshButton.disabled = false;
+      }
+    }
+
+    function renderStats(stats) {
+      const jobs = stats.jobs || {};
+      const capacity = stats.capacity || {};
+      el.statPending.textContent = jobs.pending || 0;
+      el.statDispatched.textContent = jobs.dispatched || 0;
+      el.statInProgress.textContent = jobs.in_progress || 0;
+      el.statCompleted.textContent = jobs.completed || 0;
+      el.statActive.textContent = capacity.active_runners || 0;
+      el.statAvailable.textContent = capacity.available_slots || 0;
+
+      const max = capacity.max_concurrent_runners || 0;
+      const active = capacity.active_runners || 0;
+      const percent = max > 0 ? Math.min(100, Math.round((active / max) * 100)) : 0;
+      el.capacityText.textContent = active + " / " + max + " active";
+      el.capacityNote.textContent = max > 0 ? "Max " + max + " runners" : "Capacity unknown";
+      el.capacityFill.style.width = percent + "%";
+      el.capacityFill.classList.toggle("warn", percent >= 75 && percent < 100);
+      el.capacityFill.classList.toggle("full", percent >= 100);
+    }
+
+    function renderJobs(data) {
+      const jobs = data.jobs || [];
+      el.jobsBody.textContent = "";
+      el.tableCount.textContent = jobs.length + (jobs.length === 1 ? " job" : " jobs");
+      el.emptyState.hidden = jobs.length !== 0;
+
+      for (const job of jobs) {
+        const row = document.createElement("tr");
+        row.append(
+          cell(statusBadge(job)),
+          textCell(job.repo || "-"),
+          mainCell(job.job_name || "-"),
+          workflowCell(job),
+          textCell(runLabel(job)),
+          textCell(job.runner_name || "-"),
+          timeCell(job.updated_at),
+          actionsCell(job)
+        );
+        el.jobsBody.appendChild(row);
+      }
+    }
+
+    function statusBadge(job) {
+      const span = document.createElement("span");
+      span.className = "badge " + (job.status || "");
+      if (job.conclusion && job.conclusion !== "success") {
+        span.classList.add("bad");
+      }
+      span.textContent = job.conclusion ? job.status + " / " + job.conclusion : job.status || "-";
+      return span;
+    }
+
+    function cell(child) {
+      const td = document.createElement("td");
+      td.appendChild(child);
+      return td;
+    }
+
+    function textCell(text) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      return td;
+    }
+
+    function mainCell(text) {
+      const td = textCell(text);
+      td.className = "main-cell";
+      return td;
+    }
+
+    function workflowCell(job) {
+      const td = document.createElement("td");
+      td.textContent = job.workflow_name || "-";
+      if (job.labels) {
+        const labels = document.createElement("div");
+        labels.className = "muted";
+        labels.textContent = job.labels;
+        td.appendChild(labels);
+      }
+      return td;
+    }
+
+    function runLabel(job) {
+      if (!job.run_id) {
+        return "-";
+      }
+      const attempt = job.run_attempt ? " attempt " + job.run_attempt : "";
+      return "#" + job.run_id + attempt;
+    }
+
+    function timeCell(value) {
+      const td = document.createElement("td");
+      if (!value) {
+        td.textContent = "-";
+        return td;
+      }
+      const date = new Date(value);
+      td.textContent = date.toLocaleString();
+      td.title = date.toISOString();
+      return td;
+    }
+
+    function actionsCell(job) {
+      const td = document.createElement("td");
+      const wrap = document.createElement("div");
+      wrap.className = "actions";
+      if (job.status === "completed") {
+        wrap.appendChild(actionButton("Retry", "retry", job.id));
+      }
+      if (job.status === "pending" || job.status === "dispatched") {
+        wrap.appendChild(actionButton("Cancel", "cancel", job.id));
+      }
+      if (!wrap.children.length) {
+        const span = document.createElement("span");
+        span.className = "muted";
+        span.textContent = "-";
+        wrap.appendChild(span);
+      }
+      td.appendChild(wrap);
+      return td;
+    }
+
+    function actionButton(label, action, id) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        showError("");
+        try {
+          await apiFetch("/jobs/" + id + "/" + action, { method: "POST" });
+          await refresh();
+        } catch (err) {
+          showError(err.message || action + " failed");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      return button;
+    }
+
+    function scheduleRefresh() {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+      }
+      refreshTimer = setInterval(refresh, refreshMs);
+    }
+
+    el.tokenButton.addEventListener("click", showAuth);
+    el.refreshButton.addEventListener("click", refresh);
+    el.applyFiltersButton.addEventListener("click", refresh);
+    el.saveTokenButton.addEventListener("click", () => {
+      setToken(el.tokenInput.value.trim());
+      el.authPanel.hidden = true;
+      refresh();
+    });
+    el.clearTokenButton.addEventListener("click", () => {
+      setToken("");
+      el.tokenInput.value = "";
+      refresh();
+    });
+    el.repoInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        refresh();
+      }
+    });
+
+    refresh();
+    scheduleRefresh();
+  </script>
+</body>
+</html>
