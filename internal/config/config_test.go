@@ -42,6 +42,24 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		if c.RunnerMaxLifetime != 2*time.Hour {
 			t.Errorf("RunnerMaxLifetime default = %s, want 2h", c.RunnerMaxLifetime)
 		}
+		if c.AdminToken != "" {
+			t.Errorf("AdminToken default = %q, want empty", c.AdminToken)
+		}
+	})
+}
+
+func TestLoad_AdminTokenTrimmed(t *testing.T) {
+	withEnv(t, map[string]string{
+		"BASE_URL":    "https://example.test",
+		"ADMIN_TOKEN": "  top-secret  ",
+	}, func() {
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.AdminToken != "top-secret" {
+			t.Fatalf("AdminToken = %q, want %q", c.AdminToken, "top-secret")
+		}
 	})
 }
 

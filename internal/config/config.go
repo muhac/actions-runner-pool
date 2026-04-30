@@ -16,6 +16,7 @@ type Config struct {
 	Port        string
 	BaseURL     string
 	StoreDSN    string
+	AdminToken  string
 	RunnerImage string
 	// RunnerNamePrefix scopes both the container/runner names the
 	// scheduler generates AND the orphan sweep the reconciler
@@ -48,9 +49,9 @@ type Config struct {
 	// runner launch (image pull + container start + retry budget).
 	ShutdownDrainTimeout time.Duration
 	DockerHost           string
-	GitHubAPIBase     string
-	GitHubWebBase     string
-	LogLevel          slog.Level
+	GitHubAPIBase        string
+	GitHubWebBase        string
+	LogLevel             slog.Level
 }
 
 var defaultRunnerCommand = []string{
@@ -77,6 +78,7 @@ func Load() (*Config, error) {
 		Port:                 envOr("PORT", "8080"),
 		BaseURL:              strings.TrimRight(os.Getenv("BASE_URL"), "/"),
 		StoreDSN:             envOr("STORE_DSN", "file:gharp.db?_pragma=journal_mode(WAL)"),
+		AdminToken:           strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		RunnerNamePrefix:     envOr("RUNNER_NAME_PREFIX", "gharp-"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),

@@ -273,11 +273,23 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
 		}
 		return
+	case live.Status == "completed":
+		conclusion := live.Conclusion
+		if conclusion == "" {
+			conclusion = "cancelled"
+		}
+		s.log.Info("dispatch: GitHub reports job completed; marking terminal",
+			"job_id", jobID, "github_conclusion", conclusion)
+		if completed, err := s.store.MarkJobCompleted(drainCtx, jobID, conclusion); err != nil {
+			s.log.Error("dispatch: MarkJobCompleted after GitHub completed failed", "job_id", jobID, "err", err)
+		} else if !completed {
+			s.log.Info("dispatch: completed update was a no-op", "job_id", jobID)
+		}
+		return
 	case live.Status != "queued":
 		// Most common case: the job is already in_progress (another runner
-		// won) or completed (cancelled / finished). Either way the launch
-		// is wasted work — abort before InsertRunner so we don't even
-		// create a row to clean up.
+		// won). The launch is wasted work — abort before InsertRunner so we
+		// don't even create a row to clean up.
 		s.log.Info("dispatch: GitHub reports job no longer queued; aborting launch",
 			"job_id", jobID, "github_status", live.Status, "github_conclusion", live.Conclusion)
 		return

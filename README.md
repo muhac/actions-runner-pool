@@ -80,7 +80,7 @@ fresh runner. Jobs requiring a label this pool doesn't advertise are
 dropped — see [`docs/configuration.md`](docs/configuration.md).
 
 For the full deployment guide (from-source build, docker compose,
-volumes, upgrades, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
+volumes, upgrades, ops APIs, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).
 
 ## 🤔 Why?
 

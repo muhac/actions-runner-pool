@@ -217,6 +217,48 @@ change any of them, delete the App on GitHub, wipe the gharp volume
   logs at `LOG_LEVEL=debug` for the `reconciler: tick complete`
   heartbeat to confirm it's running.
 
+### Ops APIs
+
+- `GET /healthz` — returns `ok`.
+- `GET /jobs` — returns recent jobs as JSON.
+- `GET /jobs/{job_id}` — returns full job detail, including stored webhook payload.
+- `POST /jobs/{job_id}/retry` — retries a completed job locally (status resets to pending and is enqueued).
+- `POST /jobs/{job_id}/cancel` — cancels a pending/dispatched job locally.
+
+`/jobs` supports query params:
+
+| Param | Description |
+| --- | --- |
+| `status` | One or more of `pending`, `dispatched`, `in_progress`, `completed`. Repeated (`?status=pending&status=dispatched`) or CSV (`?status=pending,dispatched`). |
+| `repo` | Exact `owner/name` filter. |
+| `limit` | Default `100`, max `500`. |
+
+`/jobs` rows include metadata captured from `workflow_job` payloads:
+`job_name`, `run_id`, `run_attempt`, `workflow_name`.
+
+**Authentication:** if `ADMIN_TOKEN` is unset or empty the endpoints are
+open. If set, every request must include `Authorization: Bearer <token>`.
+
+```bash
+# Open mode
+curl "http://localhost:8080/jobs?status=pending&limit=50"
+
+# Token-protected mode
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/jobs?status=pending,dispatched&repo=owner/repo"
+
+# Job detail
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/jobs/123456789"
+
+# Local control actions
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/jobs/123456789/retry"
+
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8080/jobs/123456789/cancel"
+```
+
 ### Logs
 
 `gharp` writes structured (`slog`) lines to stderr. `LOG_LEVEL=debug`

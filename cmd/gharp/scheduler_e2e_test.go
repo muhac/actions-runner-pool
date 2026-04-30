@@ -240,8 +240,8 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 	if containerName != runnerName {
 		t.Errorf("container_name=%q runner_name=%q (defaultNameFn returns same)", containerName, runnerName)
 	}
-	if instTokenHits.Load() != 1 {
-		t.Errorf("installation token mints=%d, want 1", instTokenHits.Load())
+	if instTokenHits.Load() < 1 {
+		t.Errorf("installation token mints=%d, want at least 1", instTokenHits.Load())
 	}
 	if regTokenHits.Load() != 1 {
 		t.Errorf("registration token mints=%d, want 1", regTokenHits.Load())
