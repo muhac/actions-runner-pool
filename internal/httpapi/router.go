@@ -19,8 +19,11 @@ func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *sched
 	setup := &handlers.SetupHandler{Cfg: cfg, Store: st, Log: log}
 	mux.HandleFunc("GET /setup", setup.Get)
 
-	jobs := &handlers.JobsHandler{Cfg: cfg, Store: st, Log: log}
+	jobs := &handlers.JobsHandler{Cfg: cfg, Store: st, Scheduler: sch, Log: log}
 	mux.HandleFunc("GET /jobs", jobs.Get)
+	mux.HandleFunc("GET /jobs/{job_id}", jobs.GetByID)
+	mux.HandleFunc("POST /jobs/{job_id}/retry", jobs.Retry)
+	mux.HandleFunc("POST /jobs/{job_id}/cancel", jobs.Cancel)
 
 	cb := &handlers.CallbackHandler{Cfg: cfg, Store: st, GitHub: gh, Log: log}
 	mux.HandleFunc("GET /github/app/callback", cb.Get)

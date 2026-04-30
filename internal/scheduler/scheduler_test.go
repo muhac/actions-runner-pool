@@ -1309,6 +1309,9 @@ func (e *errStore) CancelJobIfPending(context.Context, int64) (bool, error) {
 func (e *errStore) CancelPendingJobsForRepo(context.Context, string) (int64, error) {
 	panic("unused")
 }
+func (e *errStore) RetryJobIfCompleted(context.Context, int64) (bool, error) {
+	panic("unused")
+}
 func (e *errStore) ListJobs(context.Context, store.JobListFilter) ([]*store.Job, error) {
 	panic("unused")
 }

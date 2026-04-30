@@ -252,12 +252,17 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		}
 
 		job := &store.Job{
-			ID:        ev.WorkflowJob.ID,
-			Repo:      ev.Repository.FullName,
-			Action:    "queued",
-			Labels:    strings.Join(ev.WorkflowJob.Labels, ","),
-			DedupeKey: strconv.FormatInt(ev.WorkflowJob.ID, 10),
-			Status:    "pending",
+			ID:           ev.WorkflowJob.ID,
+			Repo:         ev.Repository.FullName,
+			JobName:      ev.WorkflowJob.Name,
+			RunID:        ev.WorkflowJob.RunID,
+			RunAttempt:   ev.WorkflowJob.RunAttempt,
+			WorkflowName: ev.WorkflowJob.WorkflowName,
+			Action:       "queued",
+			Labels:       strings.Join(ev.WorkflowJob.Labels, ","),
+			DedupeKey:    strconv.FormatInt(ev.WorkflowJob.ID, 10),
+			PayloadJSON:  string(body),
+			Status:       "pending",
 		}
 		inserted, err := h.Store.InsertJobIfNew(r.Context(), job)
 		if err != nil {

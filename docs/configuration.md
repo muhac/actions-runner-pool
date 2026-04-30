@@ -15,7 +15,7 @@ same.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port. |
-| `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Currently applies to `GET /jobs`: if set, requests must send `Authorization: Bearer <token>`; if empty/unset, the endpoint is open. |
+| `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Applies to jobs endpoints: `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/retry`, `POST /jobs/{job_id}/cancel`. If set, requests must send `Authorization: Bearer <token>`; if empty/unset, endpoints are open. |
 | `STORE_DSN` | `file:/data/gharp.db?_pragma=journal_mode(WAL)` (in the published `muhac/gharp` image) ・ `file:gharp.db?_pragma=journal_mode(WAL)` (when running the binary directly) | SQLite DSN. The image sets a default that lands in `/data`, which is declared as a `VOLUME` — mount a host directory or named volume there to survive container restarts. Override if you want the DB elsewhere. |
 | `LOG_LEVEL` | `info` | One of `debug` / `info` / `warn` (alias `warning`) / `error`. Unknown values fall back to `info`. |
 

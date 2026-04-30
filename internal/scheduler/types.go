@@ -10,14 +10,16 @@ type WorkflowJobEvent struct {
 }
 
 type WorkflowJob struct {
-	ID         int64    `json:"id"`
-	RunID      int64    `json:"run_id"`
-	Name       string   `json:"name"`
-	Status     string   `json:"status"`
-	Conclusion string   `json:"conclusion"`
-	Labels     []string `json:"labels"`
-	RunnerID   int64    `json:"runner_id"`
-	RunnerName string   `json:"runner_name"`
+	ID           int64    `json:"id"`
+	RunID        int64    `json:"run_id"`
+	RunAttempt   int64    `json:"run_attempt"`
+	Name         string   `json:"name"`
+	WorkflowName string   `json:"workflow_name"`
+	Status       string   `json:"status"`
+	Conclusion   string   `json:"conclusion"`
+	Labels       []string `json:"labels"`
+	RunnerID     int64    `json:"runner_id"`
+	RunnerName   string   `json:"runner_name"`
 }
 
 type Repository struct {

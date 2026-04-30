@@ -520,10 +520,10 @@ func TestListJobs_FilterOrderAndLimit(t *testing.T) {
 	ctx := context.Background()
 
 	seed := []*Job{
-		{ID: 1, Repo: "a/repo", Action: "queued", Labels: "x", DedupeKey: "1", Status: "pending"},
-		{ID: 2, Repo: "a/repo", Action: "queued", Labels: "x", DedupeKey: "2", Status: "completed"},
-		{ID: 3, Repo: "b/repo", Action: "queued", Labels: "x", DedupeKey: "3", Status: "pending"},
-		{ID: 4, Repo: "b/repo", Action: "queued", Labels: "x", DedupeKey: "4", Status: "dispatched"},
+		{ID: 1, Repo: "a/repo", JobName: "lint", RunID: 1001, RunAttempt: 1, WorkflowName: "CI", Action: "queued", Labels: "x", DedupeKey: "1", PayloadJSON: `{"id":1}`, Status: "pending"},
+		{ID: 2, Repo: "a/repo", JobName: "test", RunID: 1001, RunAttempt: 1, WorkflowName: "CI", Action: "queued", Labels: "x", DedupeKey: "2", PayloadJSON: `{"id":2}`, Status: "completed"},
+		{ID: 3, Repo: "b/repo", JobName: "build", RunID: 1002, RunAttempt: 3, WorkflowName: "Release", Action: "queued", Labels: "x", DedupeKey: "3", PayloadJSON: `{"id":3}`, Status: "pending"},
+		{ID: 4, Repo: "b/repo", JobName: "deploy", RunID: 1003, RunAttempt: 2, WorkflowName: "Deploy", Action: "queued", Labels: "x", DedupeKey: "4", PayloadJSON: `{"id":4}`, Status: "dispatched"},
 	}
 	for _, j := range seed {
 		if _, err := s.InsertJobIfNew(ctx, j); err != nil {
@@ -550,6 +550,9 @@ func TestListJobs_FilterOrderAndLimit(t *testing.T) {
 	if all[0].ID != 4 || all[1].ID != 3 || all[2].ID != 2 || all[3].ID != 1 {
 		t.Fatalf("unexpected order: [%d %d %d %d]", all[0].ID, all[1].ID, all[2].ID, all[3].ID)
 	}
+	if all[0].JobName != "deploy" || all[0].WorkflowName != "Deploy" || all[0].RunAttempt != 2 || all[0].PayloadJSON == "" {
+		t.Fatalf("metadata not loaded from row: %+v", all[0])
+	}
 
 	pending, err := s.ListJobs(ctx, JobListFilter{Statuses: []string{"pending"}})
 	if err != nil {
@@ -573,6 +576,40 @@ func TestListJobs_FilterOrderAndLimit(t *testing.T) {
 	}
 	if len(limited) != 2 || limited[0].ID != 4 || limited[1].ID != 3 {
 		t.Fatalf("limit mismatch: %+v", limited)
+	}
+}
+
+func TestRetryJobIfCompleted(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	j := &Job{ID: 55, Repo: "a/b", Action: "queued", Labels: "x", DedupeKey: "55", Status: "completed", Conclusion: "failure", RunnerID: 42, RunnerName: "runner-55"}
+	if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+
+	retried, err := s.RetryJobIfCompleted(ctx, 55)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retried {
+		t.Fatal("retried=false, want true")
+	}
+
+	got, err := s.GetJob(ctx, 55)
+	if err != nil || got == nil {
+		t.Fatalf("GetJob: %v / %+v", err, got)
+	}
+	if got.Status != "pending" || got.Conclusion != "" || got.RunnerID != 0 || got.RunnerName != "" {
+		t.Fatalf("retry transition mismatch: %+v", got)
+	}
+
+	retried, err = s.RetryJobIfCompleted(ctx, 55)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried {
+		t.Fatal("retried=true on non-completed row, want false")
 	}
 }
 

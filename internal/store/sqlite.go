@@ -45,7 +45,56 @@ func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := ensureJobsColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate jobs columns: %w", err)
+	}
 	return &SQLite{db: db}, nil
+}
+
+func ensureJobsColumns(ctx context.Context, db *sql.DB) error {
+	cols := map[string]string{
+		"job_name":      "TEXT NOT NULL DEFAULT ''",
+		"run_id":        "INTEGER NOT NULL DEFAULT 0",
+		"run_attempt":   "INTEGER NOT NULL DEFAULT 0",
+		"workflow_name": "TEXT NOT NULL DEFAULT ''",
+		"payload_json":  "TEXT NOT NULL DEFAULT ''",
+	}
+
+	existing := map[string]struct{}{}
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(jobs)`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			typeName string
+			notNull  int
+			dflt     sql.NullString
+			pk       int
+		)
+		if err := rows.Scan(&cid, &name, &typeName, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for name, def := range cols {
+		if _, ok := existing[name]; ok {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+name+` `+def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureDSNPragma adds `_pragma=name(value)` to a modernc.org/sqlite DSN if
@@ -192,11 +241,12 @@ WHERE r.repo = ?`
 
 func (s *SQLite) InsertJobIfNew(ctx context.Context, j *Job) (bool, error) {
 	const q = `
-INSERT INTO jobs (id, repo, action, labels, dedupe_key, status, conclusion, runner_id, runner_name)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO jobs (id, repo, job_name, run_id, run_attempt, workflow_name, action, labels, dedupe_key, payload_json, status, conclusion, runner_id, runner_name)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(dedupe_key) DO NOTHING`
 	res, err := s.db.ExecContext(ctx, q,
-		j.ID, j.Repo, j.Action, j.Labels, j.DedupeKey, j.Status, j.Conclusion, j.RunnerID, j.RunnerName)
+		j.ID, j.Repo, j.JobName, j.RunID, j.RunAttempt, j.WorkflowName, j.Action, j.Labels, j.DedupeKey, j.PayloadJSON,
+		j.Status, j.Conclusion, j.RunnerID, j.RunnerName)
 	if err != nil {
 		return false, err
 	}
@@ -208,11 +258,11 @@ ON CONFLICT(dedupe_key) DO NOTHING`
 }
 
 func (s *SQLite) GetJob(ctx context.Context, jobID int64) (*Job, error) {
-	const q = `SELECT id, repo, action, labels, dedupe_key, status, conclusion,
+	const q = `SELECT id, repo, job_name, run_id, run_attempt, workflow_name, action, labels, dedupe_key, payload_json, status, conclusion,
 		runner_id, runner_name, received_at, updated_at FROM jobs WHERE id = ?`
 	var j Job
 	err := s.db.QueryRowContext(ctx, q, jobID).Scan(
-		&j.ID, &j.Repo, &j.Action, &j.Labels, &j.DedupeKey, &j.Status, &j.Conclusion,
+		&j.ID, &j.Repo, &j.JobName, &j.RunID, &j.RunAttempt, &j.WorkflowName, &j.Action, &j.Labels, &j.DedupeKey, &j.PayloadJSON, &j.Status, &j.Conclusion,
 		&j.RunnerID, &j.RunnerName, &j.ReceivedAt, &j.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -292,6 +342,21 @@ func (s *SQLite) CancelJobIfPending(ctx context.Context, jobID int64) (bool, err
 	return n > 0, nil
 }
 
+func (s *SQLite) RetryJobIfCompleted(ctx context.Context, jobID int64) (bool, error) {
+	const q = `UPDATE jobs SET status='pending', conclusion='', runner_id=0, runner_name='',
+		action='queued', updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status='completed'`
+	res, err := s.db.ExecContext(ctx, q, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // CancelPendingJobsForRepo transitions every still-dispatchable row
 // for the repo (status in 'pending'/'dispatched') to
 // completed/cancelled. The status filter is what makes this safe to
@@ -313,7 +378,7 @@ func (s *SQLite) CancelPendingJobsForRepo(ctx context.Context, repoFullName stri
 // dispatchedReplayAge (the runner we launched never claimed a job —
 // see the dispatchedReplayAge comment).
 func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
-	const q = `SELECT id, repo, action, labels, dedupe_key, status, conclusion,
+	const q = `SELECT id, repo, job_name, run_id, run_attempt, workflow_name, action, labels, dedupe_key, payload_json, status, conclusion,
 		runner_id, runner_name, received_at, updated_at
 		FROM jobs
 		WHERE status='pending'
@@ -327,7 +392,7 @@ func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 	var out []*Job
 	for rows.Next() {
 		var j Job
-		if err := rows.Scan(&j.ID, &j.Repo, &j.Action, &j.Labels, &j.DedupeKey, &j.Status, &j.Conclusion,
+		if err := rows.Scan(&j.ID, &j.Repo, &j.JobName, &j.RunID, &j.RunAttempt, &j.WorkflowName, &j.Action, &j.Labels, &j.DedupeKey, &j.PayloadJSON, &j.Status, &j.Conclusion,
 			&j.RunnerID, &j.RunnerName, &j.ReceivedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -346,7 +411,7 @@ func (s *SQLite) ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error) 
 	}
 
 	var b strings.Builder
-	b.WriteString(`SELECT id, repo, action, labels, dedupe_key, status, conclusion,
+	b.WriteString(`SELECT id, repo, job_name, run_id, run_attempt, workflow_name, action, labels, dedupe_key, payload_json, status, conclusion,
 		runner_id, runner_name, received_at, updated_at FROM jobs`)
 
 	args := make([]any, 0, len(f.Statuses)+2)
@@ -384,7 +449,7 @@ func (s *SQLite) ListJobs(ctx context.Context, f JobListFilter) ([]*Job, error) 
 	out := make([]*Job, 0, limit)
 	for rows.Next() {
 		var j Job
-		if err := rows.Scan(&j.ID, &j.Repo, &j.Action, &j.Labels, &j.DedupeKey, &j.Status, &j.Conclusion,
+		if err := rows.Scan(&j.ID, &j.Repo, &j.JobName, &j.RunID, &j.RunAttempt, &j.WorkflowName, &j.Action, &j.Labels, &j.DedupeKey, &j.PayloadJSON, &j.Status, &j.Conclusion,
 			&j.RunnerID, &j.RunnerName, &j.ReceivedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}
