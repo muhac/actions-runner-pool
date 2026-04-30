@@ -17,12 +17,13 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
 
+**Minimal `docker run`**
+
 ```bash
 docker run -d --name gharp \
   -p 8080:8080 \
   -e BASE_URL=https://gharp.example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /tmp/gharp:/tmp/gharp \
   -v gharp-data:/data \
   muhac/gharp:latest
 ```
@@ -30,6 +31,17 @@ docker run -d --name gharp \
 `BASE_URL` must be a public HTTPS URL GitHub can reach, terminating at
 the container's port 8080 (above mapped to the host's 8080). See
 [`docs/configuration.md`](docs/configuration.md) for the full env-var reference.
+
+**Recommended — Docker Compose**
+
+```bash
+# copy docker-compose.yml from this repo, then:
+BASE_URL=https://gharp.example.com docker compose up -d
+```
+
+See [`docker-compose.yml`](docker-compose.yml) for the full reference configuration
+(includes workdir cleanup, Docker-in-Docker socket
+forwarding, and `ADMIN_TOKEN` support out of the box).
 
 ### 2. Create the GitHub App
 

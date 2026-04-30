@@ -49,9 +49,22 @@ type Config struct {
 	// runner launch (image pull + container start + retry budget).
 	ShutdownDrainTimeout time.Duration
 	DockerHost           string
-	GitHubAPIBase        string
-	GitHubWebBase        string
-	LogLevel             slog.Level
+	// RunnerWorkdirRoot is the host path containing per-runner workdirs,
+	// organized as <root>/<containerName>/. When set, reconciler cleanup
+	// removes these directories after runner teardown and via periodic
+	// orphan scans.
+	RunnerWorkdirRoot string
+	// MaintenanceCommand is an optional argv (no shell) executed on a
+	// recurring schedule, e.g. ["docker","system","prune","-f","--volumes"].
+	// Enabled only when both MaintenanceCommand and MaintenanceInterval are
+	// set. No placeholder substitution is performed.
+	MaintenanceCommand []string
+	// MaintenanceInterval is how often MaintenanceCommand is run.
+	// Zero (default) disables the periodic maintenance task entirely.
+	MaintenanceInterval time.Duration
+	GitHubAPIBase       string
+	GitHubWebBase       string
+	LogLevel            slog.Level
 }
 
 var defaultRunnerCommand = []string{
@@ -85,6 +98,8 @@ func Load() (*Config, error) {
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
 		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
+		RunnerWorkdirRoot:    strings.TrimSpace(os.Getenv("RUNNER_WORKDIR_ROOT")),
+		MaintenanceInterval:  envDuration("MAINTENANCE_INTERVAL", 0),
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
 		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),
@@ -149,6 +164,22 @@ func Load() (*Config, error) {
 		}
 	}
 
+	maintCmd, err := loadMaintenanceCommand()
+	if err != nil {
+		return nil, fmt.Errorf("MAINTENANCE_COMMAND: %w", err)
+	}
+	c.MaintenanceCommand = maintCmd
+
+	// Warn on partial configuration; missing half means disabled.
+	hasCmd := len(c.MaintenanceCommand) > 0
+	hasInterval := c.MaintenanceInterval > 0
+	if hasCmd && !hasInterval {
+		slog.Default().Warn("MAINTENANCE_COMMAND is set but MAINTENANCE_INTERVAL is missing or zero — periodic maintenance disabled")
+	}
+	if hasInterval && !hasCmd {
+		slog.Default().Warn("MAINTENANCE_INTERVAL is set but MAINTENANCE_COMMAND is empty — periodic maintenance disabled")
+	}
+
 	return c, nil
 }
 
@@ -156,6 +187,21 @@ func loadRunnerCommand() ([]string, error) {
 	raw := os.Getenv("RUNNER_COMMAND")
 	if raw == "" {
 		return append([]string(nil), defaultRunnerCommand...), nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("must be a JSON array of strings: %w", err)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("must be a non-empty JSON array")
+	}
+	return out, nil
+}
+
+func loadMaintenanceCommand() ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv("MAINTENANCE_COMMAND"))
+	if raw == "" {
+		return nil, nil
 	}
 	var out []string
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
