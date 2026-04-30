@@ -42,7 +42,12 @@ type Config struct {
 	// register but never get assigned a job — without this they hold a
 	// cap slot until the user notices.
 	RunnerMaxLifetime time.Duration
-	DockerHost        string
+	// ShutdownDrainTimeout is the maximum time the scheduler is allowed
+	// to finish an in-flight dispatch after SIGTERM before it is forcibly
+	// cancelled. Should be at least as long as your slowest expected
+	// runner launch (image pull + container start + retry budget).
+	ShutdownDrainTimeout time.Duration
+	DockerHost           string
 	GitHubAPIBase     string
 	GitHubWebBase     string
 	LogLevel          slog.Level
@@ -76,6 +81,7 @@ func Load() (*Config, error) {
 		RunnerNamePrefix:     envOr("RUNNER_NAME_PREFIX", "gharp-"),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
+		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
 		DockerHost:           os.Getenv("DOCKER_HOST"),
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
@@ -99,6 +105,10 @@ func Load() (*Config, error) {
 		// neither is what an operator could reasonably want, so reject
 		// at startup rather than degrade silently.
 		return nil, fmt.Errorf("RUNNER_MAX_LIFETIME must be a positive duration, got %s", c.RunnerMaxLifetime)
+	}
+
+	if c.ShutdownDrainTimeout <= 0 {
+		return nil, fmt.Errorf("SHUTDOWN_DRAIN_TIMEOUT must be a positive duration, got %s", c.ShutdownDrainTimeout)
 	}
 
 	if c.RunnerNamePrefix == "" {

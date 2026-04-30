@@ -83,22 +83,32 @@ func (s *Scheduler) Enqueue(jobID int64) {
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {
-	s.replay(ctx)
+	return s.RunWithDrain(ctx, ctx)
+}
+
+// RunWithDrain runs the scheduler until runCtx is cancelled. If a dispatch is
+// already in progress when runCtx is cancelled, it is allowed to complete using
+// drainCtx as its deadline. Call Run to use a single context for both.
+func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
+	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-runCtx.Done():
+			return runCtx.Err()
 		case jobID := <-s.jobCh:
-			s.dispatch(ctx, jobID)
+			s.dispatchWithContext(runCtx, drainCtx, jobID)
+			if runCtx.Err() != nil {
+				return runCtx.Err()
+			}
 		case <-ticker.C:
 			// Periodic rescue: any 'dispatched' row whose runner never
 			// claimed a job (the runner↔job race documented in
 			// architecture.md) becomes eligible after dispatchedReplayAge
 			// and gets re-dispatched here. Cheap when nothing is stuck —
 			// PendingJobs returns an empty slice in the steady state.
-			s.replay(ctx)
+			s.replay(runCtx)
 		}
 	}
 }
@@ -119,11 +129,15 @@ func (s *Scheduler) replay(ctx context.Context) {
 }
 
 func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
+	s.dispatchWithContext(ctx, ctx, jobID)
+}
+
+func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID int64) {
 	// Load the job FIRST so non-pending jobs short-circuit immediately —
 	// otherwise we'd keep AfterFunc-re-enqueueing them forever while at
 	// cap. The cap-before-GitHub-API invariant still holds: GetJob is
 	// store-only, no GitHub call yet.
-	job, err := s.store.GetJob(ctx, jobID)
+	job, err := s.store.GetJob(drainCtx, jobID)
 	if err != nil {
 		s.log.Error("dispatch: GetJob failed; leaving pending", "job_id", jobID, "err", err)
 		return
@@ -139,7 +153,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 
 	// Cap check before any GitHub API call so we never burn rate limit
 	// on a job we can't launch.
-	n, err := s.store.ActiveRunnerCount(ctx)
+	n, err := s.store.ActiveRunnerCount(drainCtx)
 	if err != nil {
 		s.log.Error("dispatch: ActiveRunnerCount failed; leaving pending", "job_id", jobID, "err", err)
 		return
@@ -151,7 +165,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		// sleep here. AfterFunc fires on its own goroutine; if ctx is
 		// already cancelled by the time it runs, drop the re-enqueue.
 		time.AfterFunc(s.capBackoff, func() {
-			if ctx.Err() != nil {
+			if runCtx.Err() != nil {
 				return
 			}
 			s.Enqueue(jobID)
@@ -159,7 +173,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	inst, err := s.store.InstallationForRepo(ctx, job.Repo)
+	inst, err := s.store.InstallationForRepo(drainCtx, job.Repo)
 	if err != nil {
 		s.log.Error("dispatch: InstallationForRepo failed", "job_id", jobID, "repo", job.Repo, "err", err)
 		return
@@ -185,7 +199,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			return
 		}
 		s.log.Info("dispatch: no installation for repo; cancelling stale job", "job_id", jobID, "repo", job.Repo, "age", age)
-		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+		if cancelled, err := s.store.CancelJobIfPending(drainCtx, jobID); err != nil {
 			s.log.Error("dispatch: CancelJobIfPending after missing installation failed", "job_id", jobID, "err", err)
 		} else if !cancelled {
 			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
@@ -193,7 +207,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		return
 	}
 
-	appCfg, err := s.store.GetAppConfig(ctx)
+	appCfg, err := s.store.GetAppConfig(drainCtx)
 	if err != nil || appCfg == nil {
 		s.log.Error("dispatch: GetAppConfig failed; leaving pending", "job_id", jobID, "err", err)
 		return
@@ -204,12 +218,12 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		s.log.Error("dispatch: AppJWT failed", "job_id", jobID, "err", err)
 		return
 	}
-	instTok, err := s.gh.InstallationToken(ctx, jwtStr, inst.ID)
+	instTok, err := s.gh.InstallationToken(drainCtx, jwtStr, inst.ID)
 	if err != nil {
 		s.log.Error("dispatch: InstallationToken failed", "job_id", jobID, "err", err)
 		return
 	}
-	regTok, err := s.gh.RegistrationToken(ctx, instTok, job.Repo)
+	regTok, err := s.gh.RegistrationToken(drainCtx, instTok, job.Repo)
 	if err != nil {
 		s.log.Error("dispatch: RegistrationToken failed", "job_id", jobID, "repo", job.Repo, "err", err)
 		return
@@ -222,7 +236,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	// claimed the job. Without this we'd happily launch a container nobody
 	// is ever going to bind to — straight ghost runner that pins a cap slot
 	// until the reconciler clears it.
-	live, err := s.gh.WorkflowJob(ctx, instTok, job.Repo, jobID)
+	live, err := s.gh.WorkflowJob(drainCtx, instTok, job.Repo, jobID)
 	switch {
 	case err != nil:
 		// API hiccup: stay conservative and proceed. The 60s reconciler +
@@ -239,9 +253,9 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		// replay. conclusion="cancelled" matches the shape of a
 		// webhook-driven cancellation.
 		s.log.Info("dispatch: GitHub returned 404 for job; confirming with retry", "job_id", jobID, "repo", job.Repo)
-		confirmed, aborted := confirm404(ctx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
+		confirmed, aborted := confirm404(drainCtx, s.gh, instTok, job.Repo, jobID, s.notFoundConfirmDelay)
 		if aborted {
-			// ctx cancelled mid-confirm — process is shutting down.
+			// drainCtx cancelled mid-confirm — process is shutting down.
 			// Returning here avoids InsertRunner+Launch with a dying
 			// ctx, which would leave a half-created orphan that the
 			// orphan sweep only catches after the grace window.
@@ -253,7 +267,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 			break
 		}
 		s.log.Info("dispatch: 404 confirmed; marking cancelled", "job_id", jobID, "repo", job.Repo)
-		if cancelled, err := s.store.CancelJobIfPending(ctx, jobID); err != nil {
+		if cancelled, err := s.store.CancelJobIfPending(drainCtx, jobID); err != nil {
 			s.log.Error("dispatch: CancelJobIfPending after 404 failed", "job_id", jobID, "err", err)
 		} else if !cancelled {
 			s.log.Info("dispatch: cancel was a no-op (job already terminal)", "job_id", jobID)
@@ -279,7 +293,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	// only (applied at the webhook).
 	containerName, runnerName := s.nameFn(jobID)
 	rowLabels := job.Labels
-	if err := s.store.InsertRunner(ctx, &store.Runner{
+	if err := s.store.InsertRunner(drainCtx, &store.Runner{
 		ContainerName: containerName,
 		Repo:          job.Repo,
 		RunnerName:    runnerName,
@@ -299,9 +313,9 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 		Labels:            rowLabels,
 		Image:             s.cfg.RunnerImage,
 	}
-	if err := s.launchWithRetry(ctx, jobID, containerName, spec); err != nil {
+	if err := s.launchWithRetry(drainCtx, jobID, containerName, spec); err != nil {
 		s.log.Error("dispatch: Launch failed", "job_id", jobID, "container", containerName, "err", err)
-		if uerr := s.store.UpdateRunnerStatus(ctx, containerName, "finished"); uerr != nil {
+		if uerr := s.store.UpdateRunnerStatus(drainCtx, containerName, "finished"); uerr != nil {
 			s.log.Error("dispatch: UpdateRunnerStatus(finished) after launch error failed", "container", containerName, "err", uerr)
 		}
 		return
@@ -311,7 +325,7 @@ func (s *Scheduler) dispatch(ctx context.Context, jobID int64) {
 	// won't re-dispatch it. Conditional on status='pending' so we can't
 	// race with the webhook's `workflow_job: in_progress` (which would
 	// already have written the real runner binding).
-	if err := s.store.MarkJobDispatched(ctx, jobID); err != nil {
+	if err := s.store.MarkJobDispatched(drainCtx, jobID); err != nil {
 		s.log.Error("dispatch: MarkJobDispatched after launch failed", "job_id", jobID, "err", err)
 	}
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)
