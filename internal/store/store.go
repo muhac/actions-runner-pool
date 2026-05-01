@@ -36,9 +36,13 @@ type Store interface {
 	// flipping a finished runner back to busy) on no-op updates.
 	MarkJobInProgress(ctx context.Context, jobID int64, runnerID int64, runnerName string) (advanced bool, err error)
 	// MarkJobCompleted records the terminal conclusion for an admitted
-	// job. Returns whether a row existed and was updated; callers use
-	// this to skip runner side effects for lifecycle events belonging
-	// to jobs this process never admitted.
+	// job. Idempotent against an already-completed row: a duplicate
+	// webhook or the stale-in_progress reconcile sweep racing a real
+	// webhook returns completed=false rather than overwriting the
+	// conclusion that won the race. Returns whether a row was actually
+	// transitioned; callers use this to skip runner side effects for
+	// lifecycle events belonging to jobs this process never admitted
+	// AND to skip side effects on no-op (already-completed) writes.
 	MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) (completed bool, err error)
 	// CancelJobIfPending transitions a single job to
 	// completed/cancelled but ONLY if its current status is still
