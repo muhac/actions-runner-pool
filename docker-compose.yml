@@ -4,7 +4,7 @@ services:
     # to use the published image instead, or `docker compose up --build`
     # to force a rebuild from source.
     build: .
-    image: muhac/gharp:latest
+    image: muhac/gharp:1
     container_name: gharp
     restart: unless-stopped
     env_file: .env

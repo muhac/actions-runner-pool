@@ -26,7 +26,7 @@ docker run -d --name gharp \
   -e BASE_URL=https://gharp.example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v gharp-data:/data \
-  muhac/gharp:latest
+  muhac/gharp:1
 ```
 
 `BASE_URL` must be a public HTTPS URL GitHub can reach, terminating at
