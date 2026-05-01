@@ -29,7 +29,7 @@ type Config struct {
 	RunnerNamePrefix string
 	RunnerCommand    []string
 	RunnerLabels     []string
-	// runnerLabelSet is the precomputed lower-cased + trimmed set of
+	// RunnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
 	RunnerLabelSet   map[string]struct{}

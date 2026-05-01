@@ -12,8 +12,8 @@
 //     The dispatched job tied to that runner is left for the scheduler's
 //     existing dispatchedReplayAge replay to rescue.
 //
-//  2. Orphan container: a container whose name matches our prefix is
-//     running, but no active runner row claims it. Force-remove it.
+//  2. Orphan container: a container whose name matches our prefix
+//     exists (any state), but no active runner row claims it. Force-remove it.
 //     A grace window protects very new containers from being swept
 //     during transient docker-vs-DB visibility skew across separate
 //     SQLite connections (InsertRunner commits on the writer
@@ -175,10 +175,10 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 	}
 }
 
-// Run blocks until ctx is cancelled.
+// Run blocks until ctx is cancelled, then returns ctx.Err().
 // Runs docker-side sweep on the main loop (owns cap-deadlock cleanup).
 // GitHub-side sweep runs in its own goroutine to avoid blocking docker cleanup.
-// Errors are logged, never propagated.
+// Non-context errors are logged and not propagated.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.Reconcile(ctx)
 	if r.gh != nil {
