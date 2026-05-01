@@ -27,6 +27,15 @@ func TestRouter_JobsRoute(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown route", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", rr.Code)
+		}
+	})
+
 	t.Run("list", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		rr := httptest.NewRecorder()

@@ -15,7 +15,7 @@ func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *sched
 	mux := http.NewServeMux()
 
 	dashboard := &handlers.DashboardHandler{Log: log}
-	mux.HandleFunc("GET /", dashboard.Get)
+	mux.HandleFunc("GET /{$}", dashboard.Get)
 
 	mux.HandleFunc("GET /healthz", handlers.Health)
 
