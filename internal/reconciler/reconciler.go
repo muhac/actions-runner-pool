@@ -592,12 +592,19 @@ func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName st
 // staleInProgressListLimit caps the per-tick read size. In normal
 // operation in_progress count is bounded by MaxConcurrentRunners
 // (typically single digits), so 500 is wildly above any realistic
-// candidate set even after a long webhook outage. Backlogs that
-// somehow exceed this drain across multiple ticks — each sweep
-// processes up to this many candidates, then stops; the next
-// tick (5min later) picks up where we left off because ListJobs
-// orders by updated_at DESC and the rows we already reconciled
-// no longer match the in_progress filter.
+// candidate set even after a long webhook outage.
+//
+// Known caveat: ListJobs orders by updated_at DESC, so this is a
+// fetch-then-filter pattern — if in_progress count ever exceeded
+// the limit, the OLDEST (genuinely stale) rows would sit beyond the
+// window and never be picked up. We're not fixing that today
+// because the realistic ceiling is MaxConcurrentRunners (4 in the
+// reference deployment, well into single digits everywhere); it
+// would take 500+ concurrently in_flight runners to trigger, which
+// implies a separate scaling problem that this sweep is not the
+// right place to handle. If that ever happens, switch to a
+// dedicated SQL-side filter (mirror PendingJobs) — sketch left in
+// the PR thread.
 const staleInProgressListLimit = 500
 
 // sweepStaleInProgressJobs catches in_progress rows whose
