@@ -597,14 +597,12 @@ func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName st
 // Known caveat: ListJobs orders by updated_at DESC, so this is a
 // fetch-then-filter pattern — if in_progress count ever exceeded
 // the limit, the OLDEST (genuinely stale) rows would sit beyond the
-// window and never be picked up. We're not fixing that today
-// because the realistic ceiling is MaxConcurrentRunners (4 in the
-// reference deployment, well into single digits everywhere); it
-// would take 500+ concurrently in_flight runners to trigger, which
-// implies a separate scaling problem that this sweep is not the
-// right place to handle. If that ever happens, switch to a
-// dedicated SQL-side filter (mirror PendingJobs) — sketch left in
-// the PR thread.
+// window and never be picked up. The realistic ceiling is
+// MaxConcurrentRunners (single digits in practice); 500+ concurrent
+// in_progress jobs implies a scaling problem upstream of this
+// sweep. The fix when that arrives is a dedicated Store method
+// mirroring PendingJobs with SQL-side `WHERE status='in_progress'
+// AND updated_at < ?` and `ORDER BY updated_at` ASC.
 const staleInProgressListLimit = 500
 
 // sweepStaleInProgressJobs catches in_progress rows whose
