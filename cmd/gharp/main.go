@@ -1,3 +1,6 @@
+// Package main is the entrypoint for the GitHub Actions runner autoscaler.
+// It initializes configuration, storage, GitHub client, scheduler, reconciler,
+// and HTTP API server, then runs them concurrently with graceful shutdown support.
 package main
 
 import (
@@ -78,11 +81,8 @@ func run() error {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			// Hard deadline: drain took too long; cancel it.
 			drainCancel()
 		case <-drainCtx.Done():
-			// drainCtx was cancelled by defer drainCancel() after run() exits
-			// (process already done — just let the goroutine clean up the timer).
 		}
 	}()
 
@@ -101,7 +101,7 @@ func run() error {
 
 	go func() {
 		<-signalCtx.Done()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownDrainTimeout)
 		defer shutdownCancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()

@@ -9,11 +9,7 @@ import (
 	"net/url"
 )
 
-// WorkflowJobStatus is the GitHub API's view of a workflow_job: the
-// truth-of-record. Used by the dispatch path's pre-launch check to
-// catch jobs that completed/cancelled while we were minting tokens —
-// without this, a webhook delay or drop would let us happily launch
-// a runner for a job nobody is going to claim.
+// WorkflowJobStatus represents the current status of a workflow job from GitHub's API.
 type WorkflowJobStatus struct {
 	// Status is one of "queued", "in_progress", "completed".
 	Status string

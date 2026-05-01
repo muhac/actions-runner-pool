@@ -30,6 +30,7 @@ type jobsEnqueuer interface {
 	Enqueue(jobID int64)
 }
 
+// JobsHandler serves runner and job status information.
 type JobsHandler struct {
 	Cfg       *config.Config
 	Store     store.Store
@@ -38,6 +39,7 @@ type JobsHandler struct {
 }
 
 // GET /jobs?status=...&repo=...&limit=...
+// Get serves runner and job summary.
 func (h *JobsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !authorizedBearer(h.Cfg, r.Header.Get("Authorization")) {
 		w.Header().Set("WWW-Authenticate", "Bearer")

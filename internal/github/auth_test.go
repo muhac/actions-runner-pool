@@ -133,12 +133,12 @@ func TestInstallationToken_DropsStaleEntry(t *testing.T) {
 		t.Fatalf("cache entry not stored")
 	}
 
-	original := nowFn
+	originalNow := c.nowFn
 	// Past the 55min cache margin, but the server's hard-coded expires_at
 	// (real_now + 1h) is still strictly after our advanced clock by ~4min,
 	// so the validation passes for the refetch.
-	nowFn = func() time.Time { return original().Add(56 * time.Minute) }
-	t.Cleanup(func() { nowFn = original })
+	c.nowFn = func() time.Time { return originalNow().Add(56 * time.Minute) }
+	t.Cleanup(func() { c.nowFn = originalNow })
 
 	hits := state.hits.Load()
 	if _, err := c.InstallationToken(context.Background(), "fake-jwt", 11); err != nil {

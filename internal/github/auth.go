@@ -12,7 +12,7 @@ import (
 )
 
 // AppJWT mints a short-lived JWT signed with the App private key (RS256).
-// iat = now-60s (clock skew margin), exp = now+10m, iss = app_id.
+// Claims: iat=now-60s (clock skew), exp=now+10m, iss=appID.
 func (c *Client) AppJWT(pem []byte, appID int64) (string, error) {
 	key, err := jwt.ParseRSAPrivateKeyFromPEM(pem)
 	if err != nil {
@@ -31,24 +31,20 @@ func (c *Client) AppJWT(pem []byte, appID int64) (string, error) {
 	return signed, nil
 }
 
-// installationTokenCache holds installation tokens with their effective expiry
-// (= server-reported expires_at minus a 5-minute safety margin).
+// cachedInstallationToken is a single entry in the token cache: the raw
+// token string and its effective expiry (server-reported expires_at minus
+// a 5-minute safety margin).
 type cachedInstallationToken struct {
 	token string
 	exp   time.Time
 }
 
-// nowFn is overridable in tests to advance the cache clock.
-var nowFn = time.Now
-
-// InstallationToken returns a cached or freshly minted installation token for
-// the given installation. Cache TTL = expires_at - 5min margin.
-//
-// The caller provides a JWT (mint with AppJWT) used only on cache miss.
+// InstallationToken returns a cached or freshly minted installation token.
+// Cache TTL is server-reported expires_at minus 5-minute safety margin.
 func (c *Client) InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error) {
 	if v, ok := c.tokenCache.Load(installationID); ok {
 		ct := v.(cachedInstallationToken)
-		if nowFn().Before(ct.exp) {
+		if c.nowFn().Before(ct.exp) {
 			return ct.token, nil
 		}
 		// Stale entry — drop it so the cache doesn't grow forever for
@@ -96,7 +92,7 @@ func (c *Client) fetchInstallationToken(ctx context.Context, jwt string, install
 	if body.ExpiresAt.IsZero() {
 		return "", time.Time{}, errors.New("installation token: missing expires_at in response")
 	}
-	if !body.ExpiresAt.After(nowFn()) {
+	if !body.ExpiresAt.After(c.nowFn()) {
 		return "", time.Time{}, errors.New("installation token: expires_at already in the past")
 	}
 	return body.Token, body.ExpiresAt, nil

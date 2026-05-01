@@ -1,3 +1,4 @@
+// Package config provides environment-based configuration for the autoscaler.
 package config
 
 import (
@@ -12,6 +13,7 @@ import (
 	"time"
 )
 
+// Config holds the application configuration loaded from environment variables.
 type Config struct {
 	Port        string
 	BaseURL     string
@@ -27,7 +29,7 @@ type Config struct {
 	RunnerNamePrefix string
 	RunnerCommand    []string
 	RunnerLabels     []string
-	// runnerLabelSet is the precomputed lower-cased + trimmed set of
+	// RunnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
 	RunnerLabelSet   map[string]struct{}
@@ -43,10 +45,11 @@ type Config struct {
 	// register but never get assigned a job — without this they hold a
 	// cap slot until the user notices.
 	RunnerMaxLifetime time.Duration
-	// ShutdownDrainTimeout is the maximum time the scheduler is allowed
-	// to finish an in-flight dispatch after SIGTERM before it is forcibly
-	// cancelled. Should be at least as long as your slowest expected
-	// runner launch (image pull + container start + retry budget).
+	// ShutdownDrainTimeout is the maximum time allowed for graceful
+	// shutdown after SIGTERM: the scheduler gets this long to finish any
+	// in-flight dispatch, and the HTTP server gets this long to drain
+	// open connections. Should be at least as long as your slowest
+	// expected runner launch (image pull + container start + retry budget).
 	ShutdownDrainTimeout time.Duration
 	DockerHost           string
 	// RunnerWorkdirRoot is the host path containing per-runner workdirs,
@@ -86,6 +89,7 @@ var requiredPlaceholders = []string{
 	"{{.Labels}}",
 }
 
+// Load reads environment variables and returns a validated Config.
 func Load() (*Config, error) {
 	c := &Config{
 		Port:                 envOr("PORT", "8080"),
@@ -178,6 +182,12 @@ func Load() (*Config, error) {
 	}
 	if hasInterval && !hasCmd {
 		slog.Default().Warn("MAINTENANCE_INTERVAL is set but MAINTENANCE_COMMAND is empty — periodic maintenance disabled")
+	}
+
+	if c.RunnerWorkdirRoot != "" {
+		if err := os.MkdirAll(c.RunnerWorkdirRoot, 0o700); err != nil {
+			return nil, fmt.Errorf("RUNNER_WORKDIR_ROOT %q is not accessible: %w", c.RunnerWorkdirRoot, err)
+		}
 	}
 
 	return c, nil

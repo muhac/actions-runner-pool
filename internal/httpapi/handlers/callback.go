@@ -18,6 +18,7 @@ type codeConverter interface {
 	ConvertCode(ctx context.Context, code string) (*github.AppCredentials, error)
 }
 
+// CallbackHandler handles GitHub OAuth callback during app installation.
 type CallbackHandler struct {
 	Cfg    *config.Config
 	Store  store.Store
@@ -25,8 +26,7 @@ type CallbackHandler struct {
 	Log    *slog.Logger
 }
 
-// GET /github/app/callback?code=<temp>&state=<state>
-// Verify state cookie, exchange code for App credentials, persist, render done page.
+// Get handles the OAuth callback from GitHub app installation.
 func (h *CallbackHandler) Get(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")

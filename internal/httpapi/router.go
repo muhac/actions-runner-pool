@@ -1,3 +1,4 @@
+// Package httpapi sets up HTTP routes for the autoscaler's API endpoints.
 package httpapi
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
+// NewRouter creates and returns the HTTP request router.
 func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *scheduler.Scheduler, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 

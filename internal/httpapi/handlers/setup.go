@@ -30,16 +30,16 @@ const (
 	stateCookieTTL = 10 * time.Minute
 )
 
+// SetupHandler manages the app installation setup flow.
 type SetupHandler struct {
 	Cfg   *config.Config
 	Store store.Store
 	Log   *slog.Logger
 }
 
-// GET /setup
-//   - If app_config exists and BaseURL matches, render setup_done with the
-//     install link (so users can install on additional accounts).
-//   - Otherwise render the manifest creation form with a fresh state cookie.
+// Get renders the setup page or completion page depending on installation state.
+// If app_config exists and BaseURL matches, renders the done page with install link.
+// Otherwise renders the manifest creation form.
 func (h *SetupHandler) Get(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.Store.GetAppConfig(r.Context())
 	if err != nil {
