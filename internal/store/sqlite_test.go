@@ -255,6 +255,36 @@ func TestMarkJobCompleted_MissingJobNoOp(t *testing.T) {
 	}
 }
 
+// Late writer (duplicate webhook, or the stale-in_progress sweep
+// racing a real webhook) must not clobber the conclusion that won
+// the race.
+func TestMarkJobCompleted_AlreadyCompleted_NoOp(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	j := &Job{ID: 11, Repo: "a/b", Action: "queued", Labels: "x",
+		DedupeKey: "11", Status: "pending"}
+	if _, err := s.InsertJobIfNew(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkJobInProgress(ctx, 11, 1, "r"); err != nil {
+		t.Fatal(err)
+	}
+	if completed, err := s.MarkJobCompleted(ctx, 11, "failure"); err != nil || !completed {
+		t.Fatalf("first MarkJobCompleted: completed=%v err=%v", completed, err)
+	}
+	completed, err := s.MarkJobCompleted(ctx, 11, "success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed {
+		t.Fatal("second MarkJobCompleted should be no-op (completed=false)")
+	}
+	got, _ := s.GetJob(ctx, 11)
+	if got.Conclusion != "failure" {
+		t.Fatalf("conclusion overwritten: got %q, want preserved %q", got.Conclusion, "failure")
+	}
+}
+
 func TestPendingJobs_ReplaysStaleDispatched(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

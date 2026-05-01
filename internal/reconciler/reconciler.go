@@ -29,6 +29,13 @@
 //     install-token quota usage. Skipped entirely when the
 //     Reconciler was constructed with a nil GitHubClient.
 //
+//  4. Stale in_progress job: an `in_progress` row whose `updated_at`
+//     is older than maxLifetime — i.e. the `workflow_job: completed`
+//     webhook never arrived. Replay only covers pending + stale
+//     dispatched, so without this sweep these rows would never
+//     transition. Same cadence and install-token cache as (3); skipped
+//     when gh is nil or maxLifetime is zero.
+//
 // Out of scope for this pass: idle-timeout reaping, dispatch-time
 // live cap checks. See docs/architecture.md §"Ghost runners and
 // reconciliation".
@@ -101,6 +108,13 @@ type Store interface {
 	// without this iteration GitHub would hold the registration
 	// until its own ~30-day timeout.
 	ListAllInstallationRepos(ctx context.Context) ([]store.RepoInstallation, error)
+	// ListJobs + MarkJobCompleted: needed by the stale-in_progress
+	// sweep, which catches rows whose `workflow_job: completed`
+	// webhook never arrived (delivery failure, signature mismatch,
+	// process downtime mid-event). The sweep filters in memory by
+	// updated_at and writes the GitHub-side authoritative conclusion.
+	ListJobs(ctx context.Context, f store.JobListFilter) ([]*store.Job, error)
+	MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) (bool, error)
 }
 
 // GitHubClient is the subset of *github.Client the GitHub-side ghost
@@ -111,6 +125,10 @@ type GitHubClient interface {
 	InstallationToken(ctx context.Context, jwt string, installationID int64) (string, error)
 	ListRepoRunners(ctx context.Context, installationToken, repoFullName string) ([]github.RepoRunner, error)
 	DeleteRepoRunner(ctx context.Context, installationToken, repoFullName string, runnerID int64) error
+	// WorkflowJob is the source-of-truth read used by the
+	// stale-in_progress sweep when a webhook completion event is
+	// presumed lost.
+	WorkflowJob(ctx context.Context, installationToken, repoFullName string, jobID int64) (*github.WorkflowJobStatus, error)
 }
 
 // Reconciler reconciles the local runner table and container state with GitHub's runner registry.
@@ -218,6 +236,7 @@ func (r *Reconciler) runWorkdirSweeper(ctx context.Context) {
 
 func (r *Reconciler) runGitHubSweeper(ctx context.Context) {
 	r.sweepGitHubGhostRunners(ctx)
+	r.sweepStaleInProgressJobs(ctx)
 	t := time.NewTicker(r.githubSweepPeriod)
 	defer t.Stop()
 	for {
@@ -226,6 +245,7 @@ func (r *Reconciler) runGitHubSweeper(ctx context.Context) {
 			return
 		case <-t.C:
 			r.sweepGitHubGhostRunners(ctx)
+			r.sweepStaleInProgressJobs(ctx)
 		}
 	}
 }
@@ -567,6 +587,195 @@ func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName st
 		}
 	}
 	return false, nil
+}
+
+// staleInProgressListLimit caps the per-tick read size. In normal
+// operation in_progress count is bounded by MaxConcurrentRunners
+// (typically single digits), so 500 is wildly above any realistic
+// candidate set even after a long webhook outage.
+//
+// Known caveat: ListJobs orders by updated_at DESC, so this is a
+// fetch-then-filter pattern — if in_progress count ever exceeded
+// the limit, the OLDEST (genuinely stale) rows would sit beyond the
+// window and never be picked up. The realistic ceiling is
+// MaxConcurrentRunners (single digits in practice); 500+ concurrent
+// in_progress jobs implies a scaling problem upstream of this
+// sweep. The fix when that arrives is a dedicated Store method
+// mirroring PendingJobs with SQL-side `WHERE status='in_progress'
+// AND updated_at < ?` and `ORDER BY updated_at` ASC.
+const staleInProgressListLimit = 500
+
+// sweepStaleInProgressJobs catches in_progress rows whose
+// `workflow_job: completed` webhook never arrived (delivery failure,
+// signature mismatch, process downtime mid-event). Without this,
+// such rows stay in_progress forever — the existing replay only
+// covers pending + stale dispatched, and webhook completion is the
+// only writer that transitions in_progress → completed.
+//
+// Threshold reuses RunnerMaxLifetime: a runner can't outlive
+// maxLifetime (the docker-side reconciler force-reaps past it), so
+// any in_progress row whose updated_at is older than that has
+// definitely lost its webhook.
+//
+// Cadence shares runGitHubSweeper (default 5min): same
+// installation-token cache, same AppJWT mint, same per-installation
+// quota budget as the GitHub-side ghost-runner sweep.
+//
+// Race: ListJobs → MarkJobCompleted is unguarded; a webhook landing
+// in that window would have its conclusion overwritten. The window
+// is one HTTP round-trip and the replacement value comes from the
+// same GitHub API as the webhook payload, so the overwrite is
+// benign. Skipped entirely when gh is nil or maxLifetime is zero.
+func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
+	if r.gh == nil || r.maxLifetime <= 0 {
+		return
+	}
+	jobs, err := r.store.ListJobs(ctx, store.JobListFilter{
+		Statuses: []string{"in_progress"},
+		Limit:    staleInProgressListLimit,
+	})
+	if err != nil {
+		r.log.Error("reconciler/github: ListJobs(in_progress) failed", "err", err)
+		return
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	now := r.nowFn()
+	stale := make([]*store.Job, 0, len(jobs))
+	for _, j := range jobs {
+		if now.Sub(j.UpdatedAt) >= r.maxLifetime {
+			stale = append(stale, j)
+		}
+	}
+	if len(stale) == 0 {
+		return
+	}
+
+	repos, err := r.store.ListAllInstallationRepos(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: ListAllInstallationRepos failed; skipping stale in_progress sweep", "err", err)
+		return
+	}
+	repoToInstall := make(map[string]int64, len(repos))
+	for _, ri := range repos {
+		repoToInstall[ri.Repo] = ri.InstallationID
+	}
+
+	appCfg, err := r.store.GetAppConfig(ctx)
+	if err != nil {
+		r.log.Error("reconciler/github: GetAppConfig failed; skipping stale in_progress sweep", "err", err)
+		return
+	}
+	if appCfg == nil {
+		r.log.Debug("reconciler/github: app config not set; skipping stale in_progress sweep")
+		return
+	}
+	jwt, err := r.gh.AppJWT(appCfg.PEM, appCfg.AppID)
+	if err != nil {
+		r.log.Error("reconciler/github: AppJWT failed; skipping stale in_progress sweep", "err", err)
+		return
+	}
+
+	tokens := map[int64]string{}
+	// failedInstalls remembers installations whose token mint failed
+	// in this tick so subsequent stale jobs sharing the installation
+	// don't each re-attempt the mint and burn quota. A flaky token
+	// endpoint with N stale jobs in one installation would otherwise
+	// cost N mint attempts per sweep.
+	failedInstalls := map[int64]struct{}{}
+	fixed := 0
+	for _, j := range stale {
+		instID, ok := repoToInstall[j.Repo]
+		if !ok {
+			r.log.Warn("reconciler/github: stale in_progress job has no installation; leaving",
+				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
+			continue
+		}
+		if _, failed := failedInstalls[instID]; failed {
+			r.log.Debug("reconciler/github: skipping job — token mint already failed this tick",
+				"job_id", j.ID, "repo", j.Repo, "installation_id", instID)
+			continue
+		}
+		tok, ok := tokens[instID]
+		if !ok {
+			tok, err = r.gh.InstallationToken(ctx, jwt, instID)
+			if err != nil {
+				r.log.Error("reconciler/github: InstallationToken failed; skipping installation this tick",
+					"job_id", j.ID, "repo", j.Repo, "installation_id", instID, "err", err)
+				failedInstalls[instID] = struct{}{}
+				continue
+			}
+			tokens[instID] = tok
+		}
+		live, err := r.gh.WorkflowJob(ctx, tok, j.Repo, j.ID)
+		if err != nil {
+			r.log.Warn("reconciler/github: WorkflowJob failed; leaving stale row",
+				"job_id", j.ID, "repo", j.Repo, "err", err)
+			continue
+		}
+		switch {
+		case live.NotFound:
+			// Job no longer exists on GitHub. Mirror dispatch's NotFound
+			// policy: treat as cancelled.
+			if _, err := r.store.MarkJobCompleted(ctx, j.ID, "cancelled"); err != nil {
+				r.log.Error("reconciler/github: MarkJobCompleted(cancelled) failed",
+					"job_id", j.ID, "err", err)
+				continue
+			}
+			r.log.Info("reconciler/github: stale in_progress reconciled (NotFound)",
+				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
+			fixed++
+		case live.AuthFailed:
+			// AuthFailed here means the install token we just minted
+			// successfully was rejected on the per-call check — most
+			// commonly the App was just uninstalled. The webhook for
+			// completion can no longer arrive either, so leaving the
+			// row in_progress would burn a WorkflowJob call every
+			// sweep cycle forever. Treat as terminal/cancelled, same
+			// policy as NotFound.
+			if _, err := r.store.MarkJobCompleted(ctx, j.ID, "cancelled"); err != nil {
+				r.log.Error("reconciler/github: MarkJobCompleted(cancelled) after AuthFailed failed",
+					"job_id", j.ID, "err", err)
+				continue
+			}
+			r.log.Info("reconciler/github: stale in_progress reconciled (AuthFailed)",
+				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
+			fixed++
+		case live.Status == "completed":
+			concl := live.Conclusion
+			if concl == "" {
+				// GH reports completed but no conclusion — extremely
+				// rare, but guard against it so we always write a
+				// non-empty terminal value.
+				concl = "neutral"
+			}
+			if _, err := r.store.MarkJobCompleted(ctx, j.ID, concl); err != nil {
+				r.log.Error("reconciler/github: MarkJobCompleted failed",
+					"job_id", j.ID, "err", err)
+				continue
+			}
+			r.log.Info("reconciler/github: stale in_progress reconciled",
+				"job_id", j.ID, "repo", j.Repo, "conclusion", concl, "age", now.Sub(j.UpdatedAt))
+			fixed++
+		default:
+			// GH still says queued/in_progress: webhook isn't lost,
+			// the job is genuinely still running. Leave it alone.
+			r.log.Debug("reconciler/github: stale in_progress still running on GitHub; leaving",
+				"job_id", j.ID, "repo", j.Repo, "gh_status", live.Status, "age", now.Sub(j.UpdatedAt))
+		}
+	}
+	if fixed > 0 {
+		// Surface actual reconciliation activity at Info so operators
+		// can see it without enabling debug. The empty-tick case
+		// stays at Debug — that's the steady state we don't want to
+		// spam the log with.
+		r.log.Info("reconciler/github: stale in_progress sweep complete",
+			"candidates", len(stale), "fixed", fixed)
+	} else {
+		r.log.Debug("reconciler/github: stale in_progress sweep complete",
+			"candidates", len(stale), "fixed", fixed)
+	}
 }
 
 func (r *Reconciler) runMaintenanceSweeper(ctx context.Context) {

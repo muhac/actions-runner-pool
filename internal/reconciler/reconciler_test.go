@@ -30,6 +30,17 @@ type fakeStore struct {
 	updErr        error
 	appCfg        *store.AppConfig
 	installations map[string]*store.Installation
+	// jobs + jobMarks back the stale-in_progress sweep tests. Tests
+	// that don't exercise that sweep can leave both nil.
+	jobs        []*store.Job
+	listJobsErr error
+	jobMarks    []jobMark
+	markErr     error
+}
+
+type jobMark struct {
+	id         int64
+	conclusion string
 }
 
 type update struct {
@@ -95,6 +106,34 @@ func (f *fakeStore) InstallationForRepo(ctx context.Context, repo string) (*stor
 		return nil, nil
 	}
 	return f.installations[repo], nil
+}
+
+func (f *fakeStore) ListJobs(ctx context.Context, _ store.JobListFilter) ([]*store.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listJobsErr != nil {
+		return nil, f.listJobsErr
+	}
+	out := make([]*store.Job, len(f.jobs))
+	copy(out, f.jobs)
+	return out, nil
+}
+
+func (f *fakeStore) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.markErr != nil {
+		return false, f.markErr
+	}
+	f.jobMarks = append(f.jobMarks, jobMark{id: jobID, conclusion: conclusion})
+	for _, j := range f.jobs {
+		if j.ID == jobID {
+			j.Status = "completed"
+			j.Conclusion = conclusion
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ListAllInstallationRepos: tests opt in by setting f.installations
@@ -431,6 +470,12 @@ type fakeGH struct {
 	instTokenCalls int
 	listCalls      int
 	deleteCalls    int
+	// jobsByID + jobErr + jobCalls back the WorkflowJob fake used by
+	// the stale-in_progress sweep tests. Tests not exercising that
+	// sweep can leave them nil/zero.
+	jobsByID map[int64]*github.WorkflowJobStatus
+	jobErr   error
+	jobCalls int
 }
 
 type deletedRunner struct {
@@ -480,6 +525,21 @@ func (g *fakeGH) DeleteRepoRunner(_ context.Context, _ string, repo string, id i
 	}
 	g.deleted = append(g.deleted, deletedRunner{repo, id})
 	return nil
+}
+
+func (g *fakeGH) WorkflowJob(_ context.Context, _ string, _ string, jobID int64) (*github.WorkflowJobStatus, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.jobCalls++
+	if g.jobErr != nil {
+		return nil, g.jobErr
+	}
+	if s, ok := g.jobsByID[jobID]; ok {
+		return s, nil
+	}
+	// Default to "still in_progress" so tests that don't seed a row
+	// observe the no-op path rather than a synthetic completion.
+	return &github.WorkflowJobStatus{Status: "in_progress"}, nil
 }
 
 // (4) GitHub has runners that we no longer have rows for -> DELETE.
@@ -622,6 +682,250 @@ func TestReconcile_GitHubGhostSweep_NilGH_Disabled(t *testing.T) {
 	dk := &fakeDocker{}
 	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-", "", nil, 0)
 	r.sweepGitHubGhostRunners(context.Background()) // no panic
+}
+
+// --- Stale in_progress sweep --------------------------------------
+
+// staleInProgressNow + staleInProgressLifetime are the standard
+// fixture for these tests: lifetime 1h, "now" anchored at a stable
+// epoch, and the helper jobUpdated(d) returning a job whose
+// updated_at is `d` ago.
+const (
+	staleInProgressNowEpoch  = int64(1_700_000_000)
+	staleInProgressLifetime  = 1 * time.Hour
+	staleInProgressTestRepo  = "alice/repo"
+	staleInProgressOtherRepo = "alice/other"
+)
+
+func staleInProgressNow() time.Time { return time.Unix(staleInProgressNowEpoch, 0) }
+
+func newStaleSweepReconciler(st Store, gh GitHubClient) *Reconciler {
+	r := New(st, &fakeDocker{}, gh, quietLog(), staleInProgressLifetime, "gharp-", "", nil, 0)
+	r.nowFn = staleInProgressNow
+	return r
+}
+
+func staleJob(id int64, repo string, ageBeforeNow time.Duration) *store.Job {
+	return &store.Job{
+		ID:        id,
+		Repo:      repo,
+		Status:    "in_progress",
+		UpdatedAt: staleInProgressNow().Add(-ageBeforeNow),
+	}
+}
+
+// Stale in_progress + GitHub says completed → MarkJobCompleted with
+// the GH-side conclusion. The core happy path: webhook completion
+// was lost, the sweep restores ground truth.
+func TestStaleInProgressSweep_CompletedOnGitHub_MarksRow(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(123, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		123: {Status: "completed", Conclusion: "success"},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 1 || st.jobMarks[0] != (jobMark{id: 123, conclusion: "success"}) {
+		t.Fatalf("expected MarkJobCompleted(123,success), got %+v", st.jobMarks)
+	}
+	if gh.jobCalls != 1 {
+		t.Fatalf("expected exactly 1 WorkflowJob call, got %d", gh.jobCalls)
+	}
+}
+
+// Stale in_progress + GitHub still says in_progress → no write.
+// Webhook isn't lost, the job is genuinely still running.
+func TestStaleInProgressSweep_StillRunningOnGitHub_NoOp(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(7, staleInProgressTestRepo, 3*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		7: {Status: "in_progress"},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 0 {
+		t.Fatalf("expected no MarkJobCompleted, got %+v", st.jobMarks)
+	}
+}
+
+// AuthFailed (401/403) means the App was almost certainly
+// uninstalled. The webhook for completion can no longer arrive
+// either; leaving the row in_progress would burn a WorkflowJob call
+// every sweep cycle forever. Treat as terminal/cancelled, same
+// policy as NotFound.
+func TestStaleInProgressSweep_AuthFailed_MarksCancelled(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(401, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		401: {AuthFailed: true},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 1 || st.jobMarks[0] != (jobMark{id: 401, conclusion: "cancelled"}) {
+		t.Fatalf("expected MarkJobCompleted(401,cancelled), got %+v", st.jobMarks)
+	}
+}
+
+// 404 from GitHub → mark cancelled (mirrors dispatch's NotFound
+// policy).
+func TestStaleInProgressSweep_NotFound_MarksCancelled(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(404, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		404: {NotFound: true},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 1 || st.jobMarks[0] != (jobMark{id: 404, conclusion: "cancelled"}) {
+		t.Fatalf("expected MarkJobCompleted(404,cancelled), got %+v", st.jobMarks)
+	}
+}
+
+// Fresh in_progress (within maxLifetime) → no GH call. This is the
+// hot path: in steady state every in_progress row is fresh and the
+// sweep must short-circuit before burning install-token quota.
+func TestStaleInProgressSweep_FreshRow_NoGitHubCall(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(1, staleInProgressTestRepo, 5*time.Minute)},
+	}
+	gh := &fakeGH{}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.jwtCalls != 0 || gh.instTokenCalls != 0 || gh.jobCalls != 0 {
+		t.Fatalf("fresh row burned GH API: jwt=%d inst=%d job=%d", gh.jwtCalls, gh.instTokenCalls, gh.jobCalls)
+	}
+	if len(st.jobMarks) != 0 {
+		t.Fatalf("expected no MarkJobCompleted on fresh row, got %+v", st.jobMarks)
+	}
+}
+
+// nil gh disables the sweep entirely (parity with the
+// ghost-runner sweep).
+func TestStaleInProgressSweep_NilGH_Disabled(t *testing.T) {
+	st := &fakeStore{
+		jobs: []*store.Job{staleJob(1, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	r := New(st, &fakeDocker{}, nil, quietLog(), staleInProgressLifetime, "gharp-", "", nil, 0)
+	r.nowFn = staleInProgressNow
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 0 {
+		t.Fatalf("nil gh should disable sweep, got marks %+v", st.jobMarks)
+	}
+}
+
+// maxLifetime == 0 disables the sweep (paranoia config; same
+// rationale as the runner-side lifetime gate at reconciler.go:296).
+func TestStaleInProgressSweep_ZeroLifetime_Disabled(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(1, staleInProgressTestRepo, 24*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		1: {Status: "completed", Conclusion: "success"},
+	}}
+	r := New(st, &fakeDocker{}, gh, quietLog(), 0, "gharp-", "", nil, 0)
+	r.nowFn = staleInProgressNow
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.jobCalls != 0 || len(st.jobMarks) != 0 {
+		t.Fatalf("zero lifetime should disable sweep, got jobCalls=%d marks=%+v", gh.jobCalls, st.jobMarks)
+	}
+}
+
+// Multiple stale rows under one installation share a single install
+// token. Mirrors the existing TokenCachedPerInstallation test for
+// the ghost-runner sweep — same quota concern.
+func TestStaleInProgressSweep_TokenCachedPerInstallation(t *testing.T) {
+	st := &fakeStore{
+		appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{
+			staleInProgressTestRepo:  {ID: 99},
+			staleInProgressOtherRepo: {ID: 99}, // same installation
+		},
+		jobs: []*store.Job{
+			staleJob(1, staleInProgressTestRepo, 2*time.Hour),
+			staleJob(2, staleInProgressOtherRepo, 2*time.Hour),
+		},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		1: {Status: "completed", Conclusion: "success"},
+		2: {Status: "completed", Conclusion: "failure"},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.instTokenCalls != 1 {
+		t.Fatalf("expected 1 InstallationToken (cached), got %d", gh.instTokenCalls)
+	}
+	if gh.jobCalls != 2 {
+		t.Fatalf("expected 2 WorkflowJob (one per stale row), got %d", gh.jobCalls)
+	}
+	if len(st.jobMarks) != 2 {
+		t.Fatalf("expected 2 marks, got %+v", st.jobMarks)
+	}
+}
+
+// A failed InstallationToken mint must not be retried for every
+// other stale job in the same installation. With N jobs in one
+// installation and a flaky token endpoint, this would otherwise
+// cost N mint attempts per sweep.
+func TestStaleInProgressSweep_TokenMintFailure_NotRetriedPerJob(t *testing.T) {
+	st := &fakeStore{
+		appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{
+			staleInProgressTestRepo:  {ID: 99},
+			staleInProgressOtherRepo: {ID: 99}, // same installation
+		},
+		jobs: []*store.Job{
+			staleJob(1, staleInProgressTestRepo, 2*time.Hour),
+			staleJob(2, staleInProgressOtherRepo, 2*time.Hour),
+			staleJob(3, staleInProgressTestRepo, 2*time.Hour),
+		},
+	}
+	gh := &fakeGH{instTokenErr: errors.New("boom")}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.instTokenCalls != 1 {
+		t.Fatalf("expected exactly 1 InstallationToken attempt, got %d", gh.instTokenCalls)
+	}
+	if gh.jobCalls != 0 {
+		t.Fatalf("WorkflowJob should not be called when token mint failed, got %d", gh.jobCalls)
+	}
+	if len(st.jobMarks) != 0 {
+		t.Fatalf("no marks expected without a valid token, got %+v", st.jobMarks)
+	}
+}
+
+// Stale row whose repo isn't in the installations map is left alone
+// (this happens after an installation is removed but the row hasn't
+// been swept by the cancel-pending-jobs path yet — webhook for the
+// cancellation could have been the one that got lost). We don't try
+// to mint a token without an installation; we log and skip.
+func TestStaleInProgressSweep_RepoWithoutInstallation_Skipped(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{}, // empty
+		jobs:          []*store.Job{staleJob(1, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	gh := &fakeGH{}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.jobCalls != 0 || len(st.jobMarks) != 0 {
+		t.Fatalf("missing installation should skip GH call and mark, got jobCalls=%d marks=%+v", gh.jobCalls, st.jobMarks)
+	}
 }
 
 func TestReconcile_GhostRunner_CleansWorkdir(t *testing.T) {

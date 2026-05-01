@@ -263,9 +263,15 @@ func (s *SQLite) MarkJobInProgress(ctx context.Context, jobID int64, runnerID in
 	return n > 0, nil
 }
 
+// MarkJobCompleted is idempotent against an already-completed row:
+// the WHERE status<>'completed' guard prevents a late writer
+// (duplicate webhook delivery, or the stale-in_progress reconcile
+// sweep racing the real webhook) from clobbering the conclusion that
+// won the race. Returns whether a transition actually happened.
 func (s *SQLite) MarkJobCompleted(ctx context.Context, jobID int64, conclusion string) (bool, error) {
 	const q = `UPDATE jobs SET status='completed', conclusion=?,
-		updated_at=CURRENT_TIMESTAMP WHERE id=?`
+		updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status<>'completed'`
 	res, err := s.db.ExecContext(ctx, q, conclusion, jobID)
 	if err != nil {
 		return false, err
