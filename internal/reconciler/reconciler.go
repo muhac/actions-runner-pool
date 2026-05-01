@@ -592,7 +592,12 @@ func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName st
 // staleInProgressListLimit caps the per-tick read size. In normal
 // operation in_progress count is bounded by MaxConcurrentRunners
 // (typically single digits), so 500 is wildly above any realistic
-// candidate set even after a long webhook outage.
+// candidate set even after a long webhook outage. Backlogs that
+// somehow exceed this drain across multiple ticks — each sweep
+// processes up to this many candidates, then stops; the next
+// tick (5min later) picks up where we left off because ListJobs
+// orders by updated_at DESC and the rows we already reconciled
+// no longer match the in_progress filter.
 const staleInProgressListLimit = 500
 
 // sweepStaleInProgressJobs catches in_progress rows whose
@@ -755,8 +760,17 @@ func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
 				"job_id", j.ID, "repo", j.Repo, "gh_status", live.Status, "age", now.Sub(j.UpdatedAt))
 		}
 	}
-	r.log.Debug("reconciler/github: stale in_progress sweep complete",
-		"candidates", len(stale), "fixed", fixed)
+	if fixed > 0 {
+		// Surface actual reconciliation activity at Info so operators
+		// can see it without enabling debug. The empty-tick case
+		// stays at Debug — that's the steady state we don't want to
+		// spam the log with.
+		r.log.Info("reconciler/github: stale in_progress sweep complete",
+			"candidates", len(stale), "fixed", fixed)
+	} else {
+		r.log.Debug("reconciler/github: stale in_progress sweep complete",
+			"candidates", len(stale), "fixed", fixed)
+	}
 }
 
 func (r *Reconciler) runMaintenanceSweeper(ctx context.Context) {
