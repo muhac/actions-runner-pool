@@ -2,6 +2,7 @@ package store
 
 import "context"
 
+// Store defines the interface for persisting job, runner, and app configuration.
 type Store interface {
 	SaveAppConfig(ctx context.Context, cfg *AppConfig) error
 	GetAppConfig(ctx context.Context) (*AppConfig, error)

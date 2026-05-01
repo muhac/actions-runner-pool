@@ -6,12 +6,8 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-// checkBaseURLDrift detects when the configured BASE_URL differs from the
-// value persisted in app_config. The persisted URL is what GitHub knows
-// (it was baked into the App's webhook + callback URLs at manifest time),
-// so a mismatch means webhooks and the OAuth callback will hit the old
-// host. We warn but don't block startup — the operator may be in the
-// middle of a planned migration.
+// checkBaseURLDrift detects BASE_URL mismatch between config and persisted app_config.
+// Warns if they differ (webhooks would hit the old URL).
 func checkBaseURLDrift(existing *store.AppConfig, configured string) (warn bool, msg string) {
 	if existing == nil {
 		return false, ""

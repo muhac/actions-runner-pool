@@ -19,6 +19,7 @@ var (
 
 const metricsSummaryTimeout = 5 * time.Second
 
+// MetricsHandler serves Prometheus metrics.
 type MetricsHandler struct {
 	Cfg   *config.Config
 	Store store.Store
@@ -27,6 +28,7 @@ type MetricsHandler struct {
 	handler http.Handler
 }
 
+// NewMetricsHandler creates a new metrics handler with default collectors.
 func NewMetricsHandler(cfg *config.Config, st store.Store, log *slog.Logger) *MetricsHandler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(&summaryCollector{cfg: cfg, store: st, log: log})
@@ -38,6 +40,7 @@ func NewMetricsHandler(cfg *config.Config, st store.Store, log *slog.Logger) *Me
 	}
 }
 
+// Get serves Prometheus metrics.
 func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !authorizedBearer(h.Cfg, r.Header.Get("Authorization")) {
 		w.Header().Set("WWW-Authenticate", "Bearer")

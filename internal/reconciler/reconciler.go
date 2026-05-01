@@ -12,8 +12,8 @@
 //     The dispatched job tied to that runner is left for the scheduler's
 //     existing dispatchedReplayAge replay to rescue.
 //
-//  2. Orphan container: a container whose name matches our prefix is
-//     running, but no active runner row claims it. Force-remove it.
+//  2. Orphan container: a container whose name matches our prefix
+//     exists (any state), but no active runner row claims it. Force-remove it.
 //     A grace window protects very new containers from being swept
 //     during transient docker-vs-DB visibility skew across separate
 //     SQLite connections (InsertRunner commits on the writer
@@ -113,6 +113,7 @@ type GitHubClient interface {
 	DeleteRepoRunner(ctx context.Context, installationToken, repoFullName string, runnerID int64) error
 }
 
+// Reconciler reconciles the local runner table and container state with GitHub's runner registry.
 type Reconciler struct {
 	store               Store
 	docker              Docker
@@ -134,21 +135,12 @@ type Reconciler struct {
 	nowFn             func() time.Time
 }
 
-// New constructs a Reconciler. maxLifetime is the hard upper bound on
-// how long a runner row can sit in the active set before the loop
-// force-removes the container and marks the row finished — defends
-// against EPHEMERAL runners that registered but never claimed a job
-// (no in_progress webhook ever arrives, the cap slot is held forever
-// otherwise). containerNamePrefix scopes the orphan sweep so it only
-// touches containers this deployment owns; pass "" to fall back to
-// DefaultContainerNamePrefix. gh is optional — pass nil to skip the
-// GitHub-side ghost-runner sweep entirely (useful for tests, or
-// deployments that prefer to let GitHub auto-expire stale
-// registrations on its own). workdirRoot points to the host directory
-// where per-runner workdirs are stored as <workdirRoot>/<containerName>.
-// Empty disables filesystem cleanup. maintenanceCmd is an optional
-// argv (no shell) run every maintenancePeriod; either being zero
-// disables the maintenance goroutine.
+// New creates a new Reconciler with the specified configuration.
+// maxLifetime caps how long a runner can stay active before force-removal.
+// containerNamePrefix scopes the orphan sweep (empty falls back to DefaultContainerNamePrefix).
+// gh is optional — pass nil to skip GitHub-side ghost-runner sweep.
+// workdirRoot enables filesystem cleanup (empty disables it).
+// maintenanceCmd with maintenancePeriod enables periodic user-supplied maintenance.
 func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string, maintenanceCmd []string, maintenancePeriod time.Duration) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
@@ -183,11 +175,10 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 	}
 }
 
-// Run blocks until ctx is cancelled. The docker-side sweep runs on the
-// main reconciler loop because it owns cap-deadlock cleanup. The slower
-// GitHub-side sweep runs in its own serial goroutine so slow GitHub API
-// calls cannot delay local docker cleanup. Errors are logged, never
-// propagated.
+// Run blocks until ctx is cancelled, then returns ctx.Err().
+// Runs docker-side sweep on the main loop (owns cap-deadlock cleanup).
+// GitHub-side sweep runs in its own goroutine to avoid blocking docker cleanup.
+// Non-context errors are logged and not propagated.
 func (r *Reconciler) Run(ctx context.Context) error {
 	r.Reconcile(ctx)
 	if r.gh != nil {

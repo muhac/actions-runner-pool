@@ -2,6 +2,7 @@ package store
 
 import "time"
 
+// AppConfig holds GitHub App credentials and configuration.
 type AppConfig struct {
 	AppID         int64
 	Slug          string
@@ -13,6 +14,7 @@ type AppConfig struct {
 	CreatedAt     time.Time
 }
 
+// Installation represents a GitHub App installation.
 type Installation struct {
 	ID           int64
 	AccountID    int64
@@ -21,14 +23,13 @@ type Installation struct {
 	CreatedAt    time.Time
 }
 
-// RepoInstallation is one row of the installation_repos join table —
-// "this App is installed on this repo via this installation". Used by
-// the GitHub-side ghost sweep to enumerate all repos the App can see.
+// RepoInstallation maps a repository to an installation.
 type RepoInstallation struct {
 	Repo           string
 	InstallationID int64
 }
 
+// Job represents a GitHub workflow job in the queue or running.
 type Job struct {
 	ID           int64
 	Repo         string
@@ -54,17 +55,20 @@ type Job struct {
 var JobStatuses = []string{"pending", "dispatched", "in_progress", "completed"}
 var RunnerStatuses = []string{"starting", "idle", "busy", "finished"}
 
+// JobListFilter provides query criteria for listing jobs.
 type JobListFilter struct {
 	Statuses []string
 	Repo     string
 	Limit    int
 }
 
+// Summary summarizes runner and job counts by status.
 type Summary struct {
 	JobsByStatus    map[string]int64
 	RunnersByStatus map[string]int64
 }
 
+// Runner represents a GitHub Actions runner managed by the autoscaler.
 type Runner struct {
 	ContainerName string
 	Repo          string

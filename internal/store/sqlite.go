@@ -1,3 +1,4 @@
+// Package store provides SQLite-backed persistence for runner, job, and app configuration state.
 package store
 
 import (
@@ -17,14 +18,17 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+// SQLite provides a SQLite-backed implementation of the Store interface.
 type SQLite struct {
 	db *sql.DB
 }
 
+// OpenSQLite opens a SQLite database at the given DSN and initializes the schema.
 func OpenSQLite(dsn string) (*SQLite, error) {
 	return OpenSQLiteWithContext(context.Background(), dsn)
 }
 
+// OpenSQLiteWithContext opens a SQLite database with a context timeout for initialization.
 func OpenSQLiteWithContext(ctx context.Context, dsn string) (*SQLite, error) {
 	// foreign_keys is per-connection in sqlite; setting it via the DSN ensures
 	// every connection in database/sql's pool gets it (a one-shot
@@ -424,16 +428,17 @@ func (s *SQLite) Summary(ctx context.Context) (*Summary, error) {
 	}, nil
 }
 
-var allowedStatusTables = map[string]struct{}{
-	"jobs":    {},
-	"runners": {},
-}
-
 func countByStatus(ctx context.Context, db *sql.DB, table string) (map[string]int64, error) {
-	if _, ok := allowedStatusTables[table]; !ok {
+	var q string
+	switch table {
+	case "jobs":
+		q = `SELECT status, count(*) FROM jobs GROUP BY status`
+	case "runners":
+		q = `SELECT status, count(*) FROM runners GROUP BY status`
+	default:
 		return nil, fmt.Errorf("countByStatus: unknown table %q", table)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM `+table+` GROUP BY status`)
+	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}

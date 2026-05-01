@@ -23,6 +23,7 @@ type jobEnqueuer interface {
 	Enqueue(jobID int64)
 }
 
+// WebhookHandler handles GitHub webhook events.
 type WebhookHandler struct {
 	Cfg       *config.Config
 	Store     store.Store
@@ -35,13 +36,9 @@ type WebhookHandler struct {
 // is generous-but-bounded so an unauthenticated caller can't OOM us.
 const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
-// POST /github/webhook
-//
-// 200 on success, 401 on bad signature, 400 on bad body, 413 on oversize body,
-// 5xx ONLY on the queued path when the store fails (so GitHub retries; the
-// INSERT-OR-IGNORE dedupe makes retry safe). Bookkeeping store errors on
-// in_progress / completed are logged and swallowed to keep GitHub from
-// retry-storming us.
+// Post processes incoming GitHub webhook events (workflow_job, installation events).
+// Returns: 200 on success, 401 on bad signature, 400/413 on bad request,
+// 5xx only on store failures (enables GitHub retry). Side effect errors are logged only.
 func (h *WebhookHandler) Post(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
 	body, err := io.ReadAll(r.Body)
