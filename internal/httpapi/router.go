@@ -16,6 +16,9 @@ import (
 func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *scheduler.Scheduler, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
+	dashboard := &handlers.DashboardHandler{Log: log}
+	mux.HandleFunc("GET /{$}", dashboard.Get)
+
 	mux.HandleFunc("GET /healthz", handlers.Health)
 
 	setup := &handlers.SetupHandler{Cfg: cfg, Store: st, Log: log}
@@ -26,6 +29,9 @@ func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *sched
 	mux.HandleFunc("GET /jobs/{job_id}", jobs.GetByID)
 	mux.HandleFunc("POST /jobs/{job_id}/retry", jobs.Retry)
 	mux.HandleFunc("POST /jobs/{job_id}/cancel", jobs.Cancel)
+
+	stats := &handlers.StatsHandler{Cfg: cfg, Store: st, Log: log}
+	mux.HandleFunc("GET /stats", stats.Get)
 
 	metrics := handlers.NewMetricsHandler(cfg, st, log)
 	mux.HandleFunc("GET /metrics", metrics.Get)

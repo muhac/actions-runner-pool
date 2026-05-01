@@ -15,7 +15,7 @@ same.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port. |
-| `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Applies to jobs and metrics endpoints: `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/retry`, `POST /jobs/{job_id}/cancel`, `GET /metrics`. If set, requests must send `Authorization: Bearer <token>`; if empty/unset, endpoints are open. |
+| `ADMIN_TOKEN` | _(unset)_ | Optional bearer token for admin-capability APIs. Applies to jobs, stats, and metrics endpoints: `GET /jobs`, `GET /jobs/{job_id}`, `POST /jobs/{job_id}/retry`, `POST /jobs/{job_id}/cancel`, `GET /stats`, `GET /metrics`. If set, requests must send `Authorization: Bearer <token>`; if empty/unset, endpoints are open. |
 | `MAINTENANCE_COMMAND` | _(unset)_ | Optional JSON argv (no shell) to run periodically, e.g. `["docker","system","prune","-f","--volumes"]`. Requires `MAINTENANCE_INTERVAL` to be set; if only one is provided, a warning is logged and the feature is disabled. Non-zero exit is logged as a warning but does not crash the service. |
 | `MAINTENANCE_INTERVAL` | _(unset)_ | How often to run `MAINTENANCE_COMMAND`. Parsed via Go's `time.ParseDuration` (`6h`, `24h`, `30m`). Requires `MAINTENANCE_COMMAND`; either missing disables periodic maintenance. |
 | `STORE_DSN` | `file:/data/gharp.db?_pragma=journal_mode(WAL)` (in the published `muhac/gharp` image) ・ `file:gharp.db?_pragma=journal_mode(WAL)` (when running the binary directly) | SQLite DSN. The image sets a default that lands in `/data`, which is declared as a `VOLUME` — mount a host directory or named volume there to survive container restarts. Override if you want the DB elsewhere. |
