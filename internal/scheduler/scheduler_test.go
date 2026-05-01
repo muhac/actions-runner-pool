@@ -1085,11 +1085,10 @@ func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
 
 // --- pre-launch GitHub WorkflowJob check ------------------------------------
 
-// GitHub reports the job is no longer queued (cancelled / claimed by
-// another runner) -> dispatch must abort BEFORE InsertRunner so we
-// don't even create a row to clean up. This is the central correctness
-// claim of the pre-launch check.
-func TestDispatch_PreLaunch_GitHubNotQueued_AbortsBeforeInsert(t *testing.T) {
+// GitHub reports the job is completed -> dispatch must abort BEFORE
+// InsertRunner and mark the local row terminal so replay does not keep
+// trying a job GitHub has already finished.
+func TestDispatch_PreLaunch_GitHubCompleted_MarksCompleted(t *testing.T) {
 	st := newStoreT(t)
 	seedAppConfig(t, st)
 	seedInstallation(t, st, 999, "owner/repo")
@@ -1110,11 +1109,9 @@ func TestDispatch_PreLaunch_GitHubNotQueued_AbortsBeforeInsert(t *testing.T) {
 	if len(active) != 0 {
 		t.Fatalf("InsertRunner ran despite cancelled job: %+v", active)
 	}
-	// The job row stays as-is; the upstream webhook will eventually
-	// transition it. We deliberately don't write anything from this branch.
 	job, _ := st.GetJob(context.Background(), 1)
-	if job.Status != "pending" {
-		t.Fatalf("job status mutated unexpectedly: %q", job.Status)
+	if job.Status != "completed" || job.Conclusion != "cancelled" {
+		t.Fatalf("job = %+v, want completed/cancelled", job)
 	}
 }
 
@@ -1313,7 +1310,7 @@ func (e *errStore) RetryJobIfCompleted(context.Context, int64) (bool, error) { p
 func (e *errStore) ListJobs(context.Context, store.JobListFilter) ([]*store.Job, error) {
 	panic("unused")
 }
-func (e *errStore) Summary(context.Context) (*store.Summary, error) { panic("unused") }
+func (e *errStore) Summary(context.Context) (*store.Summary, error)   { panic("unused") }
 func (e *errStore) InsertRunner(context.Context, *store.Runner) error { panic("unused") }
 func (e *errStore) UpdateRunnerStatus(context.Context, string, string) error {
 	panic("unused")
