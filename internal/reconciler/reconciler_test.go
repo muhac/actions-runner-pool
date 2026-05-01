@@ -754,6 +754,27 @@ func TestStaleInProgressSweep_StillRunningOnGitHub_NoOp(t *testing.T) {
 	}
 }
 
+// AuthFailed (401/403) means the App was almost certainly
+// uninstalled. The webhook for completion can no longer arrive
+// either; leaving the row in_progress would burn a WorkflowJob call
+// every sweep cycle forever. Treat as terminal/cancelled, same
+// policy as NotFound.
+func TestStaleInProgressSweep_AuthFailed_MarksCancelled(t *testing.T) {
+	st := &fakeStore{
+		appCfg:        &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{staleInProgressTestRepo: {ID: 99}},
+		jobs:          []*store.Job{staleJob(401, staleInProgressTestRepo, 2*time.Hour)},
+	}
+	gh := &fakeGH{jobsByID: map[int64]*github.WorkflowJobStatus{
+		401: {AuthFailed: true},
+	}}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if len(st.jobMarks) != 1 || st.jobMarks[0] != (jobMark{id: 401, conclusion: "cancelled"}) {
+		t.Fatalf("expected MarkJobCompleted(401,cancelled), got %+v", st.jobMarks)
+	}
+}
+
 // 404 from GitHub → mark cancelled (mirrors dispatch's NotFound
 // policy).
 func TestStaleInProgressSweep_NotFound_MarksCancelled(t *testing.T) {

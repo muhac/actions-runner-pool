@@ -717,8 +717,21 @@ func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
 				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
 			fixed++
 		case live.AuthFailed:
-			r.log.Debug("reconciler/github: WorkflowJob auth failed; skipping",
-				"job_id", j.ID, "repo", j.Repo)
+			// AuthFailed here means the install token we just minted
+			// successfully was rejected on the per-call check — most
+			// commonly the App was just uninstalled. The webhook for
+			// completion can no longer arrive either, so leaving the
+			// row in_progress would burn a WorkflowJob call every
+			// sweep cycle forever. Treat as terminal/cancelled, same
+			// policy as NotFound.
+			if _, err := r.store.MarkJobCompleted(ctx, j.ID, "cancelled"); err != nil {
+				r.log.Error("reconciler/github: MarkJobCompleted(cancelled) after AuthFailed failed",
+					"job_id", j.ID, "err", err)
+				continue
+			}
+			r.log.Info("reconciler/github: stale in_progress reconciled (AuthFailed)",
+				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
+			fixed++
 		case live.Status == "completed":
 			concl := live.Conclusion
 			if concl == "" {
