@@ -14,7 +14,7 @@ concurrency:
 jobs:
   image:
     name: ${{ github.event_name == 'pull_request' && 'Build Image' || 'Build & Push Image' }}
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
