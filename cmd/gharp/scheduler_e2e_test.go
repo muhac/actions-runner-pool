@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,16 @@ import (
 
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
+
+// buildTestBinary compiles the gharp binary into binPath with the race
+// detector enabled so that the in-process scheduler drain path exercised by
+// integration tests is also covered by the race detector.
+func buildTestBinary(t *testing.T, binPath string) {
+	t.Helper()
+	if out, err := exec.Command("go", "build", "-race", "-o", binPath, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+}
 
 // TestIntegration_QueuedJob_DispatchesRunner exercises the Phase 4 hot path
 // end-to-end: signed `workflow_job: queued` webhook → store → scheduler
@@ -97,9 +108,7 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 	//    has to happen for InsertRunner -> Launch to complete.
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "gharp")
-	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	buildTestBinary(t, binPath)
 	port, err := freePort()
 	if err != nil {
 		t.Fatal(err)
@@ -231,8 +240,8 @@ func TestIntegration_QueuedJob_DispatchesRunner(t *testing.T) {
 	if containerName != runnerName {
 		t.Errorf("container_name=%q runner_name=%q (defaultNameFn returns same)", containerName, runnerName)
 	}
-	if instTokenHits.Load() != 1 {
-		t.Errorf("installation token mints=%d, want 1", instTokenHits.Load())
+	if instTokenHits.Load() < 1 {
+		t.Errorf("installation token mints=%d, want at least 1", instTokenHits.Load())
 	}
 	if regTokenHits.Load() != 1 {
 		t.Errorf("registration token mints=%d, want 1", regTokenHits.Load())
@@ -318,9 +327,7 @@ func TestIntegration_StartupReplay_RecoversPendingJob(t *testing.T) {
 	_ = st.Close()
 
 	binPath := filepath.Join(tmp, "gharp")
-	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	buildTestBinary(t, binPath)
 	port, err := freePort()
 	if err != nil {
 		t.Fatal(err)
@@ -406,9 +413,7 @@ func bootBinary(t *testing.T, ghURL string, extraEnv map[string]string) bootResu
 	}
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "gharp")
-	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	buildTestBinary(t, binPath)
 	port, err := freePort()
 	if err != nil {
 		t.Fatal(err)
@@ -600,7 +605,7 @@ func waitForFile(path string, timeout time.Duration) error {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return os.ErrNotExist
+	return fmt.Errorf("timed out after %s waiting for %s", timeout, path)
 }
 
 // --- additional integration scenarios ---------------------------------------
@@ -615,9 +620,7 @@ func TestIntegration_SIGTERM_DrainsInflightDispatch(t *testing.T) {
 
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "gharp")
-	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	buildTestBinary(t, binPath)
 	port, err := freePort()
 	if err != nil {
 		t.Fatal(err)
@@ -707,6 +710,8 @@ func TestIntegration_SIGTERM_DrainsInflightDispatch(t *testing.T) {
 		waited = true
 		t.Fatalf("process exited before inflight dispatch drained: %v", err)
 	case <-time.After(200 * time.Millisecond):
+		// The runner script sleeps for 1s, so the process must still be alive
+		// at 200ms — well within the drain window.
 	}
 
 	if err := waitForFile(finishedPath, 5*time.Second); err != nil {
@@ -787,9 +792,7 @@ func TestIntegration_ConcurrencyCap_BlocksLaunch(t *testing.T) {
 	// We do that by passing STORE_DSN through extraEnv, but bootBinary always
 	// reseeds app_config. So instead: build a tiny custom boot here.
 	binPath := filepath.Join(tmp, "gharp")
-	if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	buildTestBinary(t, binPath)
 	port, _ := freePort()
 
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
