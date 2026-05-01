@@ -857,6 +857,37 @@ func TestStaleInProgressSweep_TokenCachedPerInstallation(t *testing.T) {
 	}
 }
 
+// A failed InstallationToken mint must not be retried for every
+// other stale job in the same installation. With N jobs in one
+// installation and a flaky token endpoint, this would otherwise
+// cost N mint attempts per sweep.
+func TestStaleInProgressSweep_TokenMintFailure_NotRetriedPerJob(t *testing.T) {
+	st := &fakeStore{
+		appCfg: &store.AppConfig{AppID: 1, PEM: []byte("pem")},
+		installations: map[string]*store.Installation{
+			staleInProgressTestRepo:  {ID: 99},
+			staleInProgressOtherRepo: {ID: 99}, // same installation
+		},
+		jobs: []*store.Job{
+			staleJob(1, staleInProgressTestRepo, 2*time.Hour),
+			staleJob(2, staleInProgressOtherRepo, 2*time.Hour),
+			staleJob(3, staleInProgressTestRepo, 2*time.Hour),
+		},
+	}
+	gh := &fakeGH{instTokenErr: errors.New("boom")}
+	r := newStaleSweepReconciler(st, gh)
+	r.sweepStaleInProgressJobs(context.Background())
+	if gh.instTokenCalls != 1 {
+		t.Fatalf("expected exactly 1 InstallationToken attempt, got %d", gh.instTokenCalls)
+	}
+	if gh.jobCalls != 0 {
+		t.Fatalf("WorkflowJob should not be called when token mint failed, got %d", gh.jobCalls)
+	}
+	if len(st.jobMarks) != 0 {
+		t.Fatalf("no marks expected without a valid token, got %+v", st.jobMarks)
+	}
+}
+
 // Stale row whose repo isn't in the installations map is left alone
 // (this happens after an installation is removed but the row hasn't
 // been swept by the cancel-pending-jobs path yet — webhook for the

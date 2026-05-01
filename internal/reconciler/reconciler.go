@@ -668,6 +668,12 @@ func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
 	}
 
 	tokens := map[int64]string{}
+	// failedInstalls remembers installations whose token mint failed
+	// in this tick so subsequent stale jobs sharing the installation
+	// don't each re-attempt the mint and burn quota. A flaky token
+	// endpoint with N stale jobs in one installation would otherwise
+	// cost N mint attempts per sweep.
+	failedInstalls := map[int64]struct{}{}
 	fixed := 0
 	for _, j := range stale {
 		instID, ok := repoToInstall[j.Repo]
@@ -676,12 +682,18 @@ func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
 				"job_id", j.ID, "repo", j.Repo, "age", now.Sub(j.UpdatedAt))
 			continue
 		}
+		if _, failed := failedInstalls[instID]; failed {
+			r.log.Debug("reconciler/github: skipping job — token mint already failed this tick",
+				"job_id", j.ID, "repo", j.Repo, "installation_id", instID)
+			continue
+		}
 		tok, ok := tokens[instID]
 		if !ok {
 			tok, err = r.gh.InstallationToken(ctx, jwt, instID)
 			if err != nil {
-				r.log.Error("reconciler/github: InstallationToken failed; skipping job",
+				r.log.Error("reconciler/github: InstallationToken failed; skipping installation this tick",
 					"job_id", j.ID, "repo", j.Repo, "installation_id", instID, "err", err)
+				failedInstalls[instID] = struct{}{}
 				continue
 			}
 			tokens[instID] = tok
