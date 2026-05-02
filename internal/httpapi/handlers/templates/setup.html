@@ -2,29 +2,55 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gharp · Setup</title>
+  <link rel="stylesheet" href="/css/pico.green.min.css">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-    code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
-    button.button { display: inline-block; padding: 0.6em 1.2em; background: #2da44e; color: white; text-decoration: none; border-radius: 6px; border: none; font-size: 1rem; cursor: pointer; }
-    .hint { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    main.container { max-width: 720px; padding-block: 2rem; }
+    header.brand { margin-bottom: 1.5rem; }
+    header.brand h1 { margin: 0; font-size: 1.6rem; font-weight: 700; }
+    header.brand h1 small {
+      color: var(--pico-muted-color);
+      font-weight: 400;
+      font-size: 1rem;
+      margin-left: 0.5rem;
+    }
   </style>
 </head>
 <body>
-  <h1>🪉 gharp · setup new app</h1>
-  <p>Click below to create a GitHub App scoped to <code>{{.BaseURL}}</code>.</p>
-  <p>You'll be redirected to GitHub to confirm permissions.
-     After creation, GitHub will send you back here to finish bootstrap.</p>
-  <p class="hint">On GitHub's "Create App" page, leave the name as-is.
-     Renaming changes the slug and breaks the install shortcut shown
-     on the next step (gharp itself keeps working — the link just
-     becomes stale).</p>
-  <p class="hint">If you see <em>"name is already taken"</em>, you have
-     a previous gharp App for this URL. <a target="_blank" href="https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app#deleting-a-github-app">Delete the old App</a>
-     first, then come back and click again.</p>
-  <form action="https://github.com/settings/apps/new?state={{.State}}" method="post">
-    <input type="hidden" name="manifest" value="{{.ManifestJSON}}">
-    <button class="button" type="submit">Create GitHub App</button>
-  </form>
+  <main class="container">
+    <header class="brand">
+      <h1>gharp <small>setup new app</small></h1>
+    </header>
+
+    <article>
+      <p>Click below to create a GitHub App scoped to <code>{{.BaseURL}}</code>.
+         You'll be redirected to GitHub to confirm permissions; after creation,
+         GitHub sends you back here to finish bootstrap.</p>
+
+      <small>
+        On GitHub's "Create App" page, leave the name as-is. Renaming changes the
+        slug and breaks the install shortcut shown on the next step (gharp itself
+        keeps working — the link just becomes stale).
+      </small>
+
+      <hr>
+
+      <small>
+        If you see <em>"name is already taken"</em>, you have a previous gharp App
+        for this URL.
+        <a target="_blank" rel="noopener"
+           href="https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app#deleting-a-github-app">Delete the old App</a>
+        first, then come back and click again.
+      </small>
+
+      <footer>
+        <form action="https://github.com/settings/apps/new?state={{.State}}" method="post">
+          <input type="hidden" name="manifest" value="{{.ManifestJSON}}">
+          <button type="submit">Create GitHub App</button>
+        </form>
+      </footer>
+    </article>
+  </main>
 </body>
 </html>

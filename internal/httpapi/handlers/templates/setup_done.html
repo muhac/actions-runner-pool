@@ -2,22 +2,46 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gharp · Ready</title>
+  <link rel="stylesheet" href="/css/pico.green.min.css">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-    a.button { display: inline-block; padding: 0.6em 1.2em; background: #2da44e; color: white; text-decoration: none; border-radius: 6px; }
-    .hint { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    main.container { max-width: 720px; padding-block: 2rem; }
+    header.brand { margin-bottom: 1.5rem; }
+    header.brand h1 { margin: 0; font-size: 1.6rem; font-weight: 700; }
+    header.brand h1 small {
+      color: var(--pico-muted-color);
+      font-weight: 400;
+      font-size: 1rem;
+      margin-left: 0.5rem;
+    }
+    .install-button { display: inline-block; }
   </style>
 </head>
 <body>
-  <h1>🪉 gharp · ready to install</h1>
-  <p>The GitHub App
-     <strong><a target="_blank" href="{{.SettingsURL}}">{{.Slug}}</a></strong>
-     has been registered.
-     Now install it on the account/repos you want gharp to serve.</p>
-  <p class="hint">Tip: keep the auto-generated name. Renaming on GitHub
-     changes the App slug, which can break this install link
-     (gharp itself keeps working — only this shortcut becomes stale).</p>
-  <p><a class="button" href="{{.InstallURL}}">Install on GitHub</a></p>
+  <main class="container">
+    <header class="brand">
+      <h1>gharp <small>ready to install</small></h1>
+    </header>
+
+    <article>
+      <p>The GitHub App
+         <strong><a target="_blank" rel="noopener" href="{{.SettingsURL}}">{{.Slug}}</a></strong>
+         has been registered. Now install it on the account/repos you want gharp
+         to serve.</p>
+
+      <small>
+        Tip: keep the auto-generated name. Renaming on GitHub changes the App
+        slug, which can break this install link (gharp itself keeps working —
+        only this shortcut becomes stale).
+      </small>
+
+      <footer>
+        <a class="install-button" role="button" href="{{.InstallURL}}">Install on GitHub</a>
+        &nbsp;
+        <a class="secondary outline" role="button" href="/">Open dashboard</a>
+      </footer>
+    </article>
+  </main>
 </body>
 </html>

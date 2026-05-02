@@ -16,7 +16,7 @@ import (
 	"github.com/muhac/actions-runner-pool/internal/store"
 )
 
-//go:embed templates/*.html
+//go:embed templates/*.html templates/css/*.css
 var templatesFS embed.FS
 
 var (
