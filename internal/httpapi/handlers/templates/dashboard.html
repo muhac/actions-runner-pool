@@ -319,12 +319,12 @@
         <table>
           <thead>
             <tr>
+              <th>Actions</th>
               <th>Status</th>
               <th>Repo</th>
               <th>Workflow</th>
               <th>Runner</th>
               <th>Updated</th>
-              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="jobsBody"></tbody>
@@ -486,12 +486,12 @@
       for (const job of jobs) {
         const row = document.createElement("tr");
         row.append(
+          actionsCell(job),
           cell(statusBadge(job)),
           repoCell(job),
           workflowCell(job),
           runnerCell(job),
-          updatedCell(job.updated_at),
-          actionsCell(job)
+          updatedCell(job.updated_at)
         );
         el.jobsBody.appendChild(row);
       }
