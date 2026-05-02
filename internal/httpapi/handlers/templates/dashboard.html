@@ -141,7 +141,13 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    .jobs-wrap td.main-cell { white-space: normal; max-width: 280px; }
+    /* The repo column is the only flexible-width cell: every other
+       column is `nowrap` and content-sized, so giving this one
+       width:100% lets `table-layout: auto` hand it all the leftover
+       space. min-width keeps it from collapsing on narrow tables;
+       white-space:normal lets pathological long names wrap rather
+       than shoving the table sideways. */
+    .jobs-wrap td.main-cell { white-space: normal; min-width: 220px; width: 100%; }
     .jobs-wrap td.muted, .jobs-wrap .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
     .empty {
       padding: 2rem 1rem;
