@@ -132,7 +132,7 @@
     .jobs-title { font-size: 1rem; font-weight: 700; }
     .jobs-count { color: var(--pico-muted-color); font-size: 0.85rem; }
     .jobs-wrap { overflow-x: auto; }
-    .jobs-wrap table { margin: 0; min-width: 820px; }
+    .jobs-wrap table { margin: 0; }
     .jobs-wrap th, .jobs-wrap td { white-space: nowrap; }
     .jobs-wrap th {
       color: var(--pico-muted-color);
@@ -141,7 +141,14 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    .jobs-wrap td.main-cell { white-space: normal; max-width: 280px; }
+    /* Repo column inherits the table-wide `nowrap` so each line
+       (repo on top, job_name in the muted sub) stays single-line
+       and the column's natural minimum is the wider of the two
+       texts. width:100% under `table-layout: auto` lets the column
+       grow past that minimum to fill leftover horizontal space on
+       wide screens; the wrapper's overflow-x:auto handles the case
+       where the row truly can't fit the viewport. */
+    .jobs-wrap td.main-cell { width: 100%; }
     .jobs-wrap td.muted, .jobs-wrap .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
     .empty {
       padding: 2rem 1rem;
@@ -312,12 +319,12 @@
         <table>
           <thead>
             <tr>
+              <th>Actions</th>
               <th>Status</th>
               <th>Repo</th>
               <th>Workflow</th>
               <th>Runner</th>
               <th>Updated</th>
-              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="jobsBody"></tbody>
@@ -479,12 +486,12 @@
       for (const job of jobs) {
         const row = document.createElement("tr");
         row.append(
+          actionsCell(job),
           cell(statusBadge(job)),
           repoCell(job),
           workflowCell(job),
           runnerCell(job),
-          updatedCell(job.updated_at),
-          actionsCell(job)
+          updatedCell(job.updated_at)
         );
         el.jobsBody.appendChild(row);
       }
