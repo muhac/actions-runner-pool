@@ -217,6 +217,27 @@ change any of them, delete the App on GitHub, wipe the gharp volume
   logs at `LOG_LEVEL=debug` for the `reconciler: tick complete`
   heartbeat to confirm it's running.
 
+### Known limitations
+
+- **Concurrent workflows that publish host ports collide.** The
+  default `myoung34/github-runner` image uses Docker-out-of-Docker
+  (the runner shares the host's `/var/run/docker.sock`), so any
+  `docker run -p 5432:5432` your workflow performs binds the host's
+  port — two parallel jobs both trying to start Postgres on `:5432`
+  will conflict. The same applies to anything that contends for a
+  host-global resource (named volumes, bridge networks of a fixed
+  name, `--network=host` services, etc.). Workarounds:
+  - Use ephemeral ports in your workflow (`-p 0:5432` and read the
+    assigned port from `docker port`), or rely on container-to-
+    container networking instead of `-p`.
+  - Switch to a Docker-in-Docker runner image so each runner has
+    its own Docker daemon. [Sysbox](https://github.com/nestybox/sysbox)
+    is the cleanest path here — provide a custom `RUNNER_COMMAND`
+    that adds `--runtime=sysbox-runc` and drops the
+    `/var/run/docker.sock` mount. gharp doesn't ship a Sysbox-based
+    template by default because it requires installing the Sysbox
+    runtime on the host.
+
 ### Ops APIs
 
 - `GET /` — serves the built-in dashboard for status, recent jobs, filters, and retry/cancel controls.
