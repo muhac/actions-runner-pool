@@ -68,15 +68,22 @@
     .capacity progress[data-state="full"]::-webkit-progress-value { background: var(--pico-color-red-500); }
     .capacity progress[data-state="full"]::-moz-progress-bar { background: var(--pico-color-red-500); }
 
-    /* Filter row uses Pico's grid for inputs and a flush button. */
-    .toolbar {
+    /* Filters: status on its own row, then repo + limit + apply. */
+    .toolbar { margin-bottom: var(--pico-block-spacing-vertical); }
+    .toolbar label.field-label {
+      display: block;
+      margin-bottom: 0.4rem;
+      color: var(--pico-muted-color);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .toolbar .filter-row + .filter-row { margin-top: 0.85rem; }
+    .toolbar .filter-row.controls {
       display: grid;
-      grid-template-columns: minmax(200px, 1fr) minmax(180px, 1fr) 110px auto;
+      grid-template-columns: minmax(200px, 1fr) 110px auto;
       gap: 0.75rem;
       align-items: end;
-      margin-bottom: var(--pico-block-spacing-vertical);
     }
-    .toolbar label { color: var(--pico-muted-color); font-size: 0.78rem; font-weight: 600; }
     .toolbar input, .toolbar select { margin: 0; }
     .toolbar button { margin: 0; height: 2.4rem; }
 
@@ -85,7 +92,6 @@
       flex-wrap: wrap;
       gap: 0.4rem;
       align-items: center;
-      min-height: 2.4rem;
     }
     .status-check {
       display: inline-flex;
@@ -97,8 +103,20 @@
       background: var(--pico-card-background-color);
       font-size: 0.82rem;
       cursor: pointer;
+      user-select: none;
     }
     .status-check input { margin: 0; }
+    .status-clear {
+      margin-left: auto;
+      padding: 0.15rem 0.6rem;
+      background: transparent;
+      border: 0;
+      color: var(--pico-muted-color);
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .status-clear:hover { color: var(--pico-primary); }
+    .status-clear:disabled { color: var(--pico-muted-color); opacity: 0.45; cursor: not-allowed; }
 
     /* Jobs table: collapse Pico's vertical padding a bit, allow scroll. */
     .jobs-card { padding: 0; overflow: hidden; }
@@ -178,7 +196,7 @@
   <header class="container">
     <nav>
       <ul>
-        <li class="brand">gharp <small>runner autoscaler</small></li>
+        <li class="brand">gharp <small>GitHub Actions Runner Pool</small></li>
       </ul>
       <ul>
         <li><span id="lastUpdated" class="last-updated">Not refreshed yet</span></li>
@@ -241,30 +259,33 @@
     </article>
 
     <article class="toolbar" aria-label="Job filters">
-      <div>
-        <label>Status</label>
+      <div class="filter-row">
+        <label class="field-label">Status</label>
         <div class="status-checks">
           <label class="status-check"><input type="checkbox" name="status" value="pending"> pending</label>
           <label class="status-check"><input type="checkbox" name="status" value="dispatched"> dispatched</label>
           <label class="status-check"><input type="checkbox" name="status" value="in_progress"> in progress</label>
           <label class="status-check"><input type="checkbox" name="status" value="completed"> completed</label>
+          <button id="clearStatusButton" type="button" class="status-clear" disabled>Clear all</button>
         </div>
       </div>
-      <div>
-        <label for="repoInput">Repo</label>
-        <input id="repoInput" type="text" placeholder="owner/name">
+      <div class="filter-row controls">
+        <div>
+          <label class="field-label" for="repoInput">Repo</label>
+          <input id="repoInput" type="text" placeholder="owner/name">
+        </div>
+        <div>
+          <label class="field-label" for="limitInput">Limit</label>
+          <select id="limitInput">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+            <option value="500">500</option>
+          </select>
+        </div>
+        <button id="applyFiltersButton" type="button">Apply</button>
       </div>
-      <div>
-        <label for="limitInput">Limit</label>
-        <select id="limitInput">
-          <option value="25">25</option>
-          <option value="50" selected>50</option>
-          <option value="100">100</option>
-          <option value="250">250</option>
-          <option value="500">500</option>
-        </select>
-      </div>
-      <button id="applyFiltersButton" type="button">Apply</button>
     </article>
 
     <article class="jobs-card">
@@ -307,6 +328,8 @@
       tokenButton: document.getElementById("tokenButton"),
       refreshButton: document.getElementById("refreshButton"),
       applyFiltersButton: document.getElementById("applyFiltersButton"),
+      clearStatusButton: document.getElementById("clearStatusButton"),
+      statusCheckboxes: document.querySelectorAll("input[name=status]"),
       errorBanner: document.getElementById("errorBanner"),
       lastUpdated: document.getElementById("lastUpdated"),
       statPending: document.getElementById("statPending"),
@@ -565,9 +588,31 @@
       refreshTimer = setInterval(refresh, refreshMs);
     }
 
+    function syncClearStatusButton() {
+      const anyChecked = [...el.statusCheckboxes].some(box => box.checked);
+      el.clearStatusButton.disabled = !anyChecked;
+    }
+
     el.tokenButton.addEventListener("click", showAuth);
     el.refreshButton.addEventListener("click", refresh);
     el.applyFiltersButton.addEventListener("click", refresh);
+    el.statusCheckboxes.forEach(box => box.addEventListener("change", () => {
+      syncClearStatusButton();
+      refresh();
+    }));
+    el.clearStatusButton.addEventListener("click", () => {
+      let changed = false;
+      el.statusCheckboxes.forEach(box => {
+        if (box.checked) {
+          box.checked = false;
+          changed = true;
+        }
+      });
+      syncClearStatusButton();
+      if (changed) {
+        refresh();
+      }
+    });
     el.saveTokenButton.addEventListener("click", () => {
       setToken(el.tokenInput.value.trim());
       el.authPanel.hidden = true;
@@ -584,6 +629,7 @@
       }
     });
 
+    syncClearStatusButton();
     refresh();
     scheduleRefresh();
   </script>
