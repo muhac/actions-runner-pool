@@ -160,6 +160,7 @@
     .badge {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       padding: 0.15rem 0.55rem;
       border-radius: 999px;
       border: 1px solid var(--pico-muted-border-color);
@@ -167,6 +168,7 @@
       color: var(--pico-muted-color);
       font-size: 0.75rem;
       font-weight: 600;
+      min-width: 6rem;
     }
     /* Backgrounds are desaturated against the GitHub palette so the
        table row reads first and the status pill recedes; text/border
@@ -178,7 +180,7 @@
     .badge.bad         { color: #9b1c1c; border-color: #d8b9b6; background: #f1e3e1; }
 
     .row-actions { display: flex; gap: 0.4rem; }
-    .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; }
+    .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; min-width: 4.5rem; }
 
     /* Auth + alert articles render compactly. */
     .auth-panel form {
@@ -200,9 +202,7 @@
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       header > nav { flex-wrap: wrap; }
     }
-    /* On phone-width screens the 3-column repo/limit/apply row
-       overflowed (Repo's 200px min + Limit + button + gaps + article
-       padding > 375px). Promote Repo to span the full row, leave
+    /* On phone-width, promote Repo to span the full row, leave
        Limit and Apply on the next line side-by-side. */
     @media (max-width: 600px) {
       .toolbar .filter-row.controls {
@@ -552,7 +552,7 @@
       if (job.conclusion && job.conclusion !== "success") {
         span.classList.add("bad");
       }
-      span.textContent = job.conclusion ? job.status + " / " + job.conclusion : job.status || "-";
+      span.textContent = job.conclusion || job.status || "-";
       return span;
     }
 
@@ -579,10 +579,10 @@
       const wrap = document.createElement("div");
       wrap.className = "row-actions";
       if (job.status === "completed") {
-        wrap.appendChild(actionButton("Retry", "retry", job.id, ""));
+        wrap.appendChild(actionButton("Retry", "retry", job.id, "secondary outline"));
       }
       if (job.status === "pending" || job.status === "dispatched") {
-        wrap.appendChild(actionButton("Cancel", "cancel", job.id, "secondary outline"));
+        wrap.appendChild(actionButton("Cancel", "cancel", job.id, ""));
       }
       if (!wrap.children.length) {
         const span = document.createElement("span");
