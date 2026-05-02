@@ -554,7 +554,7 @@
       if (job.conclusion && job.conclusion !== "success") {
         span.classList.add("bad");
       }
-      span.textContent = job.conclusion ? job.status + " / " + job.conclusion : job.status || "-";
+      span.textContent = job.conclusion || job.status || "-";
       return span;
     }
 
