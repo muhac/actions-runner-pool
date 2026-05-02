@@ -221,22 +221,27 @@ change any of them, delete the App on GitHub, wipe the gharp volume
 
 - **Concurrent workflows that publish host ports collide.** The
   default `myoung34/github-runner` image uses Docker-out-of-Docker
-  (the runner shares the host's `/var/run/docker.sock`), so any
-  `docker run -p 5432:5432` your workflow performs binds the host's
-  port — two parallel jobs both trying to start Postgres on `:5432`
-  will conflict. The same applies to anything that contends for a
-  host-global resource (named volumes, bridge networks of a fixed
-  name, `--network=host` services, etc.). Workarounds:
-  - Use ephemeral ports in your workflow (`-p 0:5432` and read the
-    assigned port from `docker port`), or rely on container-to-
-    container networking instead of `-p`.
-  - Switch to a Docker-in-Docker runner image so each runner has
-    its own Docker daemon. [Sysbox](https://github.com/nestybox/sysbox)
-    is the cleanest path here — provide a custom `RUNNER_COMMAND`
-    that adds `--runtime=sysbox-runc` and drops the
-    `/var/run/docker.sock` mount. gharp doesn't ship a Sysbox-based
-    template by default because it requires installing the Sysbox
-    runtime on the host.
+  (the runner shares the host's `/var/run/docker.sock` and runs on
+  `--network=host`), so any `docker run -p 5432:5432` your workflow
+  performs binds the host's port — two parallel jobs both trying to
+  start Postgres on `:5432` will conflict. The same applies to
+  anything that contends for a host-global resource (named volumes,
+  fixed-name bridge networks, services on `--network=host`, etc.).
+  Container-to-container networking is **not** a workaround on its
+  own: with the runner on host network, a sibling container without
+  `-p` is unreachable from the workflow steps. Workarounds:
+  - Use ephemeral ports in workflows where the consumer can read the
+    assigned port back (`docker run -p 0:5432 ...` then `docker port`).
+    Most off-the-shelf tooling assumes fixed ports, so this only
+    helps for code you control.
+  - Switch to a Docker-in-Docker runner so each runner has its own
+    Docker daemon and its own port namespace.
+    [Sysbox](https://github.com/nestybox/sysbox) is the cleanest
+    path: install the Sysbox runtime on the host, then ship a
+    custom `RUNNER_COMMAND` that adds `--runtime=sysbox-runc` and
+    drops the `/var/run/docker.sock` bind mount. gharp doesn't ship
+    a Sysbox-based template by default because it requires the
+    host-side runtime install.
 
 ### Ops APIs
 
