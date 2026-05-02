@@ -17,6 +17,11 @@ services:
       # whatever `latest` resolves to today. ubuntu-noble = 24.04.
       RUNNER_IMAGE: "myoung34/github-runner:ubuntu-noble"
       RUNNER_WORKDIR_ROOT: /tmp/gharp
+      # Bearer token for the admin/JSON APIs (dashboard, /jobs, /stats,
+      # retry/cancel). Read from the host env or .env (see .env.example).
+      # Empty value = no auth, dashboard fully open. Must be set on any
+      # internet-reachable deployment.
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
       # Optional: run a periodic maintenance command (e.g. to prune Docker
       # storage). Both variables must be set together to enable the feature.
       # MAINTENANCE_COMMAND: '["docker","system","prune","-f","--volumes"]'

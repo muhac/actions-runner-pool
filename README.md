@@ -41,8 +41,9 @@ BASE_URL=https://gharp.example.com docker compose up -d
 ```
 
 See [`docker-compose.yml`](docker-compose.yml) for the full reference configuration
-(includes workdir cleanup, Docker-in-Docker socket
-forwarding, and `ADMIN_TOKEN` support out of the box).
+(workdir cleanup, host Docker socket forwarding for ephemeral runners,
+runner-container log caps, and `ADMIN_TOKEN` passthrough — set the
+token in `.env`).
 
 ### 2. Create the GitHub App
 
