@@ -190,8 +190,19 @@
     /* Responsive: collapse stats and toolbar on narrow viewports. */
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .toolbar { grid-template-columns: 1fr; }
       header > nav { flex-wrap: wrap; }
+    }
+    /* On phone-width screens the 3-column repo/limit/apply row
+       overflowed (Repo's 200px min + Limit + button + gaps + article
+       padding > 375px). Promote Repo to span the full row, leave
+       Limit and Apply on the next line side-by-side. */
+    @media (max-width: 600px) {
+      .toolbar .filter-row.controls {
+        grid-template-columns: 110px 1fr;
+      }
+      .toolbar .filter-row.controls > div:first-child {
+        grid-column: 1 / -1;
+      }
     }
   </style>
 </head>
