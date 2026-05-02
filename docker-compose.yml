@@ -11,6 +11,11 @@ services:
     # RUNNER_COMMAND uses YAML `>-` so the multi-line source folds to one
     # line at runtime; .env can't hold multi-line values.
     environment:
+      # Concurrent runner cap.
+      MAX_CONCURRENT_RUNNERS: "4"
+      # Pin the runner image so reproducibility doesn't depend on
+      # whatever `latest` resolves to today. ubuntu-noble = 24.04.
+      RUNNER_IMAGE: "myoung34/github-runner:ubuntu-noble"
       RUNNER_WORKDIR_ROOT: /tmp/gharp
       # Optional: run a periodic maintenance command (e.g. to prune Docker
       # storage). Both variables must be set together to enable the feature.
@@ -21,13 +26,15 @@ services:
           "docker","run","--rm","-d",
           "--name","{{.ContainerName}}",
           "--network=host",
+          "--log-opt","max-size=10m",
+          "--log-opt","max-file=3",
           "-v","/var/run/docker.sock:/var/run/docker.sock",
-          "-v","/tmp/gharp/{{.ContainerName}}:/_work",
+          "-v","/tmp/gharp/{{.ContainerName}}/_work:/tmp/gharp/{{.ContainerName}}/_work",
           "-e","REPO_URL={{.RepoURL}}",
           "-e","RUNNER_TOKEN={{.RegistrationToken}}",
           "-e","RUNNER_NAME={{.RunnerName}}",
           "-e","LABELS={{.Labels}}",
-          "-e","RUNNER_WORKDIR=/_work",
+          "-e","RUNNER_WORKDIR=/tmp/gharp/{{.ContainerName}}/_work",
           "-e","EPHEMERAL=1",
           "{{.Image}}"
         ]
