@@ -9,8 +9,8 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 * 🔐 **Self-hosted** — no external service dependency
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
+* 📊 **Built-in dashboard** — inspect jobs and runners (with prometheus metrics), and retry/cancel controls
 * 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
-* 📊 **Built-in dashboard** — inspect queue status, recent jobs, and retry/cancel controls
 
 ## 🚀 Quick Start
 
@@ -41,8 +41,9 @@ BASE_URL=https://gharp.example.com docker compose up -d
 ```
 
 See [`docker-compose.yml`](docker-compose.yml) for the full reference configuration
-(includes workdir cleanup, Docker-in-Docker socket
-forwarding, and `ADMIN_TOKEN` support out of the box).
+(workdir cleanup, host Docker socket forwarding for ephemeral runners,
+runner-container log caps, and `ADMIN_TOKEN` passthrough — set the
+token in `.env`).
 
 ### 2. Create the GitHub App
 

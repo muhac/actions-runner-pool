@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gharp · Dashboard</title>
+  <link rel="icon" href="https://zany.sh/favicon.svg?emoji=🪉">
   <link rel="stylesheet" href="/css/pico.green.min.css">
   <style>
     /* Tighten Pico's default spacing for a denser admin layout. */
@@ -131,7 +132,7 @@
     .jobs-title { font-size: 1rem; font-weight: 700; }
     .jobs-count { color: var(--pico-muted-color); font-size: 0.85rem; }
     .jobs-wrap { overflow-x: auto; }
-    .jobs-wrap table { margin: 0; min-width: 980px; }
+    .jobs-wrap table { margin: 0; min-width: 820px; }
     .jobs-wrap th, .jobs-wrap td { white-space: nowrap; }
     .jobs-wrap th {
       color: var(--pico-muted-color);
@@ -160,11 +161,14 @@
       font-size: 0.75rem;
       font-weight: 600;
     }
-    .badge.pending     { color: #9a6700; border-color: #d4a72c; background: #fff8c5; }
-    .badge.dispatched  { color: #0969da; border-color: #54aeff; background: #ddf4ff; }
-    .badge.in_progress { color: #1a7f37; border-color: #4ac26b; background: #dafbe1; }
+    /* Backgrounds are desaturated against the GitHub palette so the
+       table row reads first and the status pill recedes; text/border
+       keep enough hue to be unambiguous at a glance. */
+    .badge.pending     { color: #6b4d00; border-color: #d4c79a; background: #f1ecdb; }
+    .badge.dispatched  { color: #0a4f9c; border-color: #b6cae0; background: #e6edf4; }
+    .badge.in_progress { color: #155b29; border-color: #b8d4c1; background: #e6ede8; }
     .badge.completed   { color: var(--pico-muted-color); }
-    .badge.bad         { color: #cf222e; border-color: #ff8182; background: #ffebe9; }
+    .badge.bad         { color: #9b1c1c; border-color: #d8b9b6; background: #f1e3e1; }
 
     .row-actions { display: flex; gap: 0.4rem; }
     .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; }
@@ -187,8 +191,19 @@
     /* Responsive: collapse stats and toolbar on narrow viewports. */
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .toolbar { grid-template-columns: 1fr; }
       header > nav { flex-wrap: wrap; }
+    }
+    /* On phone-width screens the 3-column repo/limit/apply row
+       overflowed (Repo's 200px min + Limit + button + gaps + article
+       padding > 375px). Promote Repo to span the full row, leave
+       Limit and Apply on the next line side-by-side. */
+    @media (max-width: 600px) {
+      .toolbar .filter-row.controls {
+        grid-template-columns: 110px 1fr;
+      }
+      .toolbar .filter-row.controls > div:first-child {
+        grid-column: 1 / -1;
+      }
     }
   </style>
 </head>
@@ -299,9 +314,7 @@
             <tr>
               <th>Status</th>
               <th>Repo</th>
-              <th>Job</th>
               <th>Workflow</th>
-              <th>Run</th>
               <th>Runner</th>
               <th>Updated</th>
               <th>Actions</th>
@@ -467,16 +480,63 @@
         const row = document.createElement("tr");
         row.append(
           cell(statusBadge(job)),
-          textCell(job.repo || "-"),
-          mainCell(job.job_name || "-"),
+          repoCell(job),
           workflowCell(job),
-          textCell(runLabel(job)),
-          textCell(job.runner_name || "-"),
-          timeCell(job.updated_at),
+          runnerCell(job),
+          updatedCell(job.updated_at),
           actionsCell(job)
         );
         el.jobsBody.appendChild(row);
       }
+    }
+
+    // Two-line cell helper: primary text on top, muted secondary
+    // text (job name, run #, time of day, etc.) directly below.
+    function stackedCell(primary, secondary, options = {}) {
+      const td = document.createElement("td");
+      td.textContent = primary || "-";
+      if (options.title) {
+        td.title = options.title;
+      }
+      if (options.className) {
+        td.className = options.className;
+      }
+      if (secondary) {
+        const sub = document.createElement("div");
+        sub.className = "muted";
+        sub.textContent = secondary;
+        td.appendChild(sub);
+      }
+      return td;
+    }
+
+    function repoCell(job) {
+      return stackedCell(job.repo || "-", job.job_name || "", {
+        title: job.repo || "",
+        className: "main-cell"
+      });
+    }
+
+    function runnerCell(job) {
+      return stackedCell(job.runner_name || "-", runLabel(job), {
+        title: job.runner_name || ""
+      });
+    }
+
+    function updatedCell(value) {
+      const td = document.createElement("td");
+      if (!value) {
+        td.textContent = "-";
+        return td;
+      }
+      const date = new Date(value);
+      td.textContent = date.toLocaleDateString();
+      td.title = date.toISOString();
+      const sub = document.createElement("div");
+      sub.className = "muted";
+      sub.textContent = date.toLocaleTimeString();
+      td.appendChild(sub);
+      return td;
     }
 
     function statusBadge(job) {
@@ -495,48 +555,16 @@
       return td;
     }
 
-    function textCell(text) {
-      const td = document.createElement("td");
-      td.textContent = text;
-      return td;
-    }
-
-    function mainCell(text) {
-      const td = textCell(text);
-      td.className = "main-cell";
-      return td;
-    }
-
     function workflowCell(job) {
-      const td = document.createElement("td");
-      td.textContent = job.workflow_name || "-";
-      if (job.labels) {
-        const labels = document.createElement("div");
-        labels.className = "muted";
-        labels.textContent = job.labels;
-        td.appendChild(labels);
-      }
-      return td;
+      return stackedCell(job.workflow_name || "-", job.labels || "");
     }
 
     function runLabel(job) {
       if (!job.run_id) {
-        return "-";
+        return "";
       }
       const attempt = job.run_attempt ? " attempt " + job.run_attempt : "";
       return "#" + job.run_id + attempt;
-    }
-
-    function timeCell(value) {
-      const td = document.createElement("td");
-      if (!value) {
-        td.textContent = "-";
-        return td;
-      }
-      const date = new Date(value);
-      td.textContent = date.toLocaleString();
-      td.title = date.toISOString();
-      return td;
     }
 
     function actionsCell(job) {

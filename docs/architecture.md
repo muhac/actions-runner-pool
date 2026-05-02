@@ -12,7 +12,6 @@
 Non-goals (for v1):
 - Multi-node deployment.
 - gRPC / public API.
-- Built-in dashboard for queue status, recent jobs, and basic controls.
 - Kubernetes integration (ARC already owns that space).
 
 ## High-level flow
