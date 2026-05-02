@@ -4,411 +4,244 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gharp · Dashboard</title>
+  <link rel="stylesheet" href="css/pico.green.min.css">
   <style>
+    /* Tighten Pico's default spacing for a denser admin layout. */
     :root {
-      --bg: #f6f8fa;
-      --panel: #ffffff;
-      --text: #1f2328;
-      --muted: #656d76;
-      --border: #d0d7de;
-      --border-strong: #afb8c1;
-      --accent: #0969da;
-      --accent-soft: #ddf4ff;
-      --danger: #cf222e;
-      --danger-soft: #ffebe9;
-      --success: #1a7f37;
-      --success-soft: #dafbe1;
-      --warning: #9a6700;
-      --warning-soft: #fff8c5;
-      --neutral-soft: #f6f8fa;
-      --shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+      --pico-spacing: 0.875rem;
+      --pico-block-spacing-vertical: 1rem;
+      --pico-form-element-spacing-vertical: 0.5rem;
+      --pico-form-element-spacing-horizontal: 0.75rem;
+      --pico-typography-spacing-vertical: 0.75rem;
     }
 
-    * { box-sizing: border-box; }
+    main.container { padding-block: 1.5rem; }
 
-    body {
-      margin: 0;
-      min-width: 320px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 14px;
-      line-height: 1.45;
-    }
+    /* Header: brand on the left, action buttons on the right. */
+    header > nav .brand { font-size: 1.4rem; font-weight: 700; }
+    header > nav .brand small { color: var(--pico-muted-color); font-weight: 400; margin-left: 0.5rem; }
+    header > nav .last-updated { color: var(--pico-muted-color); font-size: 0.85rem; margin-right: 0.5rem; }
+    header > nav button { margin: 0; }
 
-    button, input, select {
-      font: inherit;
-    }
-
-    button {
-      border: 1px solid var(--border-strong);
-      border-radius: 6px;
-      background: var(--panel);
-      color: var(--text);
-      cursor: pointer;
-      min-height: 34px;
-      padding: 0 12px;
-    }
-
-    button:hover { border-color: var(--accent); color: var(--accent); }
-    button:disabled { cursor: not-allowed; opacity: 0.55; }
-
-    input, select {
-      min-height: 34px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--panel);
-      color: var(--text);
-      padding: 0 10px;
-    }
-
-    input:focus, select:focus, button:focus {
-      outline: 2px solid rgba(9, 105, 218, 0.22);
-      outline-offset: 1px;
-    }
-
-    .shell {
-      width: min(1220px, 100%);
-      margin: 0 auto;
-      padding: 24px;
-    }
-
-    .topbar {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 18px;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 24px;
-      font-weight: 700;
-    }
-
-    .subtitle {
-      margin-top: 4px;
-      color: var(--muted);
-    }
-
-    .top-actions {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .last-updated {
-      color: var(--muted);
-      font-size: 13px;
-      white-space: nowrap;
-    }
-
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-    }
-
-    .auth-panel {
-      display: grid;
-      grid-template-columns: minmax(220px, 1fr) auto auto;
-      gap: 10px;
-      align-items: center;
-      padding: 12px;
-      margin-bottom: 16px;
-    }
-
-    .auth-panel[hidden], .banner[hidden] { display: none; }
-
-    .banner {
-      padding: 10px 12px;
-      margin-bottom: 16px;
-      border-color: #f0b8b8;
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
-
-    .stats-grid {
+    /* Compact stat tiles. */
+    .stats {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
+      gap: 0.75rem;
+      margin-bottom: var(--pico-block-spacing-vertical);
     }
-
-    .stat-card {
-      padding: 14px;
-      min-height: 96px;
+    .stat {
+      margin: 0;
+      padding: 0.875rem 1rem;
     }
-
-    .stat-label {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
-      letter-spacing: 0;
+    .stat .label {
+      color: var(--pico-muted-color);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-
-    .stat-value {
-      margin-top: 8px;
-      font-size: 30px;
-      font-weight: 720;
+    .stat .value {
+      margin-top: 0.4rem;
+      font-size: 1.75rem;
+      font-weight: 700;
       line-height: 1;
     }
-
-    .stat-note {
-      margin-top: 8px;
-      color: var(--muted);
-      font-size: 13px;
+    .stat .note {
+      margin-top: 0.4rem;
+      color: var(--pico-muted-color);
+      font-size: 0.78rem;
     }
 
-    .capacity {
-      padding: 16px;
-      margin-bottom: 16px;
-    }
-
+    /* Capacity bar with threshold-based color states. */
+    .capacity { margin-bottom: var(--pico-block-spacing-vertical); }
     .capacity-head {
       display: flex;
       justify-content: space-between;
-      gap: 12px;
-      color: var(--muted);
-      margin-bottom: 10px;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+      color: var(--pico-muted-color);
     }
+    .capacity progress { margin: 0; height: 0.6rem; }
+    .capacity progress[data-state="warn"]::-webkit-progress-value { background: var(--pico-color-amber-500); }
+    .capacity progress[data-state="warn"]::-moz-progress-bar { background: var(--pico-color-amber-500); }
+    .capacity progress[data-state="full"]::-webkit-progress-value { background: var(--pico-color-red-500); }
+    .capacity progress[data-state="full"]::-moz-progress-bar { background: var(--pico-color-red-500); }
 
-    .capacity-track {
-      height: 12px;
-      border-radius: 999px;
-      overflow: hidden;
-      background: var(--neutral-soft);
-      border: 1px solid var(--border);
-    }
-
-    .capacity-fill {
-      width: 0%;
-      height: 100%;
-      background: var(--success);
-      transition: width 150ms ease, background 150ms ease;
-    }
-
-    .capacity-fill.warn { background: var(--warning); }
-    .capacity-fill.full { background: var(--danger); }
-
+    /* Filter row uses Pico's grid for inputs and a flush button. */
     .toolbar {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) 120px auto;
-      gap: 10px;
+      grid-template-columns: minmax(200px, 1fr) minmax(180px, 1fr) 110px auto;
+      gap: 0.75rem;
       align-items: end;
-      padding: 12px;
-      margin-bottom: 16px;
+      margin-bottom: var(--pico-block-spacing-vertical);
     }
-
-    .field label {
-      display: block;
-      margin-bottom: 5px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
-    }
+    .toolbar label { color: var(--pico-muted-color); font-size: 0.78rem; font-weight: 600; }
+    .toolbar input, .toolbar select { margin: 0; }
+    .toolbar button { margin: 0; height: 2.4rem; }
 
     .status-checks {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      min-height: 34px;
+      gap: 0.4rem;
       align-items: center;
+      min-height: 2.4rem;
     }
-
     .status-check {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      min-height: 28px;
-      padding: 0 8px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--neutral-soft);
-      color: var(--text);
-      font-size: 13px;
+      gap: 0.3rem;
+      padding: 0.2rem 0.6rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 999px;
+      background: var(--pico-card-background-color);
+      font-size: 0.82rem;
+      cursor: pointer;
     }
+    .status-check input { margin: 0; }
 
-    .status-check input {
-      min-height: auto;
-      margin: 0;
-      padding: 0;
-    }
-
-    .table-panel {
-      overflow: hidden;
-    }
-
-    .table-head {
+    /* Jobs table: collapse Pico's vertical padding a bit, allow scroll. */
+    .jobs-card { padding: 0; overflow: hidden; }
+    .jobs-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
+      gap: 0.75rem;
+      padding: 0.875rem 1.125rem;
+      border-bottom: 1px solid var(--pico-muted-border-color);
+    }
+    .jobs-title { font-size: 1rem; font-weight: 700; }
+    .jobs-count { color: var(--pico-muted-color); font-size: 0.85rem; }
+    .jobs-wrap { overflow-x: auto; }
+    .jobs-wrap table { margin: 0; min-width: 980px; }
+    .jobs-wrap th, .jobs-wrap td { white-space: nowrap; }
+    .jobs-wrap th {
+      color: var(--pico-muted-color);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .jobs-wrap td.main-cell { white-space: normal; max-width: 280px; }
+    .jobs-wrap td.muted, .jobs-wrap .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
+    .empty {
+      padding: 2rem 1rem;
+      text-align: center;
+      color: var(--pico-muted-color);
     }
 
-    .table-title {
-      font-size: 16px;
-      font-weight: 700;
-    }
-
-    .table-count {
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .table-wrap {
-      overflow-x: auto;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 980px;
-    }
-
-    th, td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      text-align: left;
-      vertical-align: top;
-      white-space: nowrap;
-    }
-
-    th {
-      color: var(--muted);
-      background: var(--neutral-soft);
-      font-size: 12px;
-      font-weight: 650;
-    }
-
-    tbody tr:hover {
-      background: #fbfcfd;
-    }
-
-    .main-cell {
-      max-width: 260px;
-      white-space: normal;
-    }
-
-    .muted {
-      color: var(--muted);
-      font-size: 13px;
-    }
-
+    /* Status pills: subtle backgrounds keyed off Pico color tokens. */
     .badge {
       display: inline-flex;
       align-items: center;
-      min-height: 24px;
-      padding: 0 8px;
+      padding: 0.15rem 0.55rem;
       border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--neutral-soft);
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
+      border: 1px solid var(--pico-muted-border-color);
+      background: var(--pico-card-background-color);
+      color: var(--pico-muted-color);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge.pending     { color: #9a6700; border-color: #d4a72c; background: #fff8c5; }
+    .badge.dispatched  { color: #0969da; border-color: #54aeff; background: #ddf4ff; }
+    .badge.in_progress { color: #1a7f37; border-color: #4ac26b; background: #dafbe1; }
+    .badge.completed   { color: var(--pico-muted-color); }
+    .badge.bad         { color: #cf222e; border-color: #ff8182; background: #ffebe9; }
+
+    .row-actions { display: flex; gap: 0.4rem; }
+    .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; }
+
+    /* Auth + alert articles render compactly. */
+    .auth-panel form {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 0.5rem;
+      align-items: center;
+      margin: 0;
+    }
+    .auth-panel input, .auth-panel button { margin: 0; }
+    .alert {
+      border-color: #f0b8b8;
+      background: #ffebe9;
+      color: #cf222e;
     }
 
-    .badge.pending { border-color: #d4a72c; background: var(--warning-soft); color: var(--warning); }
-    .badge.dispatched { border-color: #54aeff; background: var(--accent-soft); color: var(--accent); }
-    .badge.in_progress { border-color: #4ac26b; background: var(--success-soft); color: var(--success); }
-    .badge.completed { border-color: var(--border); background: var(--neutral-soft); color: var(--muted); }
-    .badge.bad { border-color: #ff8182; background: var(--danger-soft); color: var(--danger); }
-
-    .actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    .empty {
-      padding: 32px 16px;
-      color: var(--muted);
-      text-align: center;
-    }
-
+    /* Responsive: collapse stats and toolbar on narrow viewports. */
     @media (max-width: 900px) {
-      .shell { padding: 16px; }
-      .topbar { display: block; }
-      .top-actions { justify-content: flex-start; margin-top: 12px; }
-      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toolbar { grid-template-columns: 1fr; }
-      .auth-panel { grid-template-columns: 1fr; }
+      header > nav { flex-wrap: wrap; }
     }
   </style>
 </head>
 <body>
-  <main id="app" class="shell">
-    <div class="topbar">
-      <div>
-        <h1>gharp</h1>
-        <div class="subtitle">GitHub Actions runner autoscaler dashboard</div>
-      </div>
-      <div class="top-actions">
-        <span id="lastUpdated" class="last-updated">Not refreshed yet</span>
-        <button id="tokenButton" type="button">Token</button>
-        <button id="refreshButton" type="button">Refresh</button>
-      </div>
-    </div>
+  <header class="container">
+    <nav>
+      <ul>
+        <li class="brand">gharp <small>runner autoscaler</small></li>
+      </ul>
+      <ul>
+        <li><span id="lastUpdated" class="last-updated">Not refreshed yet</span></li>
+        <li><button id="tokenButton" type="button" class="secondary outline">Token</button></li>
+        <li><button id="refreshButton" type="button">Refresh</button></li>
+      </ul>
+    </nav>
+  </header>
 
-    <section id="authPanel" class="panel auth-panel" hidden>
-      <input id="tokenInput" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
-      <button id="saveTokenButton" type="button">Save token</button>
-      <button id="clearTokenButton" type="button">Clear</button>
+  <main id="app" class="container">
+    <article id="authPanel" class="auth-panel" hidden>
+      <form>
+        <input id="tokenInput" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
+        <button id="saveTokenButton" type="button">Save token</button>
+        <button id="clearTokenButton" type="button" class="secondary outline">Clear</button>
+      </form>
+    </article>
+
+    <article id="errorBanner" class="alert" role="alert" hidden></article>
+
+    <section class="stats" aria-label="Current status">
+      <article class="stat">
+        <div class="label">Pending</div>
+        <div id="statPending" class="value">0</div>
+        <div class="note">Waiting for runners</div>
+      </article>
+      <article class="stat">
+        <div class="label">Dispatched</div>
+        <div id="statDispatched" class="value">0</div>
+        <div class="note">Runner launched</div>
+      </article>
+      <article class="stat">
+        <div class="label">In progress</div>
+        <div id="statInProgress" class="value">0</div>
+        <div class="note">Bound to runner</div>
+      </article>
+      <article class="stat">
+        <div class="label">Completed</div>
+        <div id="statCompleted" class="value">0</div>
+        <div class="note">Terminal jobs</div>
+      </article>
+      <article class="stat">
+        <div class="label">Active runners</div>
+        <div id="statActive" class="value">0</div>
+        <div class="note">Starting, idle, busy</div>
+      </article>
+      <article class="stat">
+        <div class="label">Available slots</div>
+        <div id="statAvailable" class="value">0</div>
+        <div id="capacityNote" class="note">Capacity unknown</div>
+      </article>
     </section>
 
-    <section id="errorBanner" class="panel banner" hidden></section>
-
-    <section class="stats-grid" aria-label="Current status">
-      <div class="panel stat-card">
-        <div class="stat-label">Pending</div>
-        <div id="statPending" class="stat-value">0</div>
-        <div class="stat-note">Waiting for runners</div>
-      </div>
-      <div class="panel stat-card">
-        <div class="stat-label">Dispatched</div>
-        <div id="statDispatched" class="stat-value">0</div>
-        <div class="stat-note">Runner launched</div>
-      </div>
-      <div class="panel stat-card">
-        <div class="stat-label">In progress</div>
-        <div id="statInProgress" class="stat-value">0</div>
-        <div class="stat-note">Bound to runner</div>
-      </div>
-      <div class="panel stat-card">
-        <div class="stat-label">Completed</div>
-        <div id="statCompleted" class="stat-value">0</div>
-        <div class="stat-note">Terminal jobs</div>
-      </div>
-      <div class="panel stat-card">
-        <div class="stat-label">Active runners</div>
-        <div id="statActive" class="stat-value">0</div>
-        <div class="stat-note">Starting, idle, busy</div>
-      </div>
-      <div class="panel stat-card">
-        <div class="stat-label">Available slots</div>
-        <div id="statAvailable" class="stat-value">0</div>
-        <div id="capacityNote" class="stat-note">Capacity unknown</div>
-      </div>
-    </section>
-
-    <section class="panel capacity">
+    <article class="capacity">
       <div class="capacity-head">
         <strong>Runner capacity</strong>
         <span id="capacityText">0 / 0 active</span>
       </div>
-      <div class="capacity-track" aria-hidden="true">
-        <div id="capacityFill" class="capacity-fill"></div>
-      </div>
-    </section>
+      <progress id="capacityFill" value="0" max="100"></progress>
+    </article>
 
-    <section class="panel toolbar" aria-label="Job filters">
-      <div class="field">
+    <article class="toolbar" aria-label="Job filters">
+      <div>
         <label>Status</label>
         <div class="status-checks">
           <label class="status-check"><input type="checkbox" name="status" value="pending"> pending</label>
@@ -417,11 +250,11 @@
           <label class="status-check"><input type="checkbox" name="status" value="completed"> completed</label>
         </div>
       </div>
-      <div class="field">
+      <div>
         <label for="repoInput">Repo</label>
         <input id="repoInput" type="text" placeholder="owner/name">
       </div>
-      <div class="field">
+      <div>
         <label for="limitInput">Limit</label>
         <select id="limitInput">
           <option value="25">25</option>
@@ -432,14 +265,14 @@
         </select>
       </div>
       <button id="applyFiltersButton" type="button">Apply</button>
-    </section>
+    </article>
 
-    <section class="panel table-panel">
-      <div class="table-head">
-        <div class="table-title">Recent jobs</div>
-        <div id="tableCount" class="table-count">0 jobs</div>
+    <article class="jobs-card">
+      <div class="jobs-head">
+        <span class="jobs-title">Recent jobs</span>
+        <span id="tableCount" class="jobs-count">0 jobs</span>
       </div>
-      <div class="table-wrap">
+      <div class="jobs-wrap">
         <table>
           <thead>
             <tr>
@@ -457,7 +290,7 @@
         </table>
       </div>
       <div id="emptyState" class="empty" hidden>No jobs match the current filters.</div>
-    </section>
+    </article>
   </main>
 
   <script>
@@ -591,9 +424,14 @@
       const percent = max > 0 ? Math.min(100, Math.round((active / max) * 100)) : 0;
       el.capacityText.textContent = active + " / " + max + " active";
       el.capacityNote.textContent = max > 0 ? "Max " + max + " runners" : "Capacity unknown";
-      el.capacityFill.style.width = percent + "%";
-      el.capacityFill.classList.toggle("warn", percent >= 75 && percent < 100);
-      el.capacityFill.classList.toggle("full", percent >= 100);
+      el.capacityFill.value = percent;
+      if (percent >= 100) {
+        el.capacityFill.dataset.state = "full";
+      } else if (percent >= 75) {
+        el.capacityFill.dataset.state = "warn";
+      } else {
+        delete el.capacityFill.dataset.state;
+      }
     }
 
     function renderJobs(data) {
@@ -681,12 +519,12 @@
     function actionsCell(job) {
       const td = document.createElement("td");
       const wrap = document.createElement("div");
-      wrap.className = "actions";
+      wrap.className = "row-actions";
       if (job.status === "completed") {
-        wrap.appendChild(actionButton("Retry", "retry", job.id));
+        wrap.appendChild(actionButton("Retry", "retry", job.id, ""));
       }
       if (job.status === "pending" || job.status === "dispatched") {
-        wrap.appendChild(actionButton("Cancel", "cancel", job.id));
+        wrap.appendChild(actionButton("Cancel", "cancel", job.id, "secondary outline"));
       }
       if (!wrap.children.length) {
         const span = document.createElement("span");
@@ -698,9 +536,12 @@
       return td;
     }
 
-    function actionButton(label, action, id) {
+    function actionButton(label, action, id, variant) {
       const button = document.createElement("button");
       button.type = "button";
+      if (variant) {
+        button.className = variant;
+      }
       button.textContent = label;
       button.addEventListener("click", async () => {
         button.disabled = true;
