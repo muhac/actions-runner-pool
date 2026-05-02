@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gharp · Dashboard</title>
-  <link rel="stylesheet" href="css/pico.green.min.css">
+  <link rel="stylesheet" href="/css/pico.green.min.css">
   <style>
     /* Tighten Pico's default spacing for a denser admin layout. */
     :root {
@@ -63,10 +63,13 @@
       color: var(--pico-muted-color);
     }
     .capacity progress { margin: 0; height: 0.6rem; }
-    .capacity progress[data-state="warn"]::-webkit-progress-value { background: var(--pico-color-amber-500); }
-    .capacity progress[data-state="warn"]::-moz-progress-bar { background: var(--pico-color-amber-500); }
-    .capacity progress[data-state="full"]::-webkit-progress-value { background: var(--pico-color-red-500); }
-    .capacity progress[data-state="full"]::-moz-progress-bar { background: var(--pico-color-red-500); }
+    /* Pico's themed bundle doesn't expose its raw color palette as
+       custom properties, so we hard-code the warn/full hues to match
+       the badge palette used elsewhere on the page. */
+    .capacity progress[data-state="warn"]::-webkit-progress-value { background: #d4a72c; }
+    .capacity progress[data-state="warn"]::-moz-progress-bar { background: #d4a72c; }
+    .capacity progress[data-state="full"]::-webkit-progress-value { background: #cf222e; }
+    .capacity progress[data-state="full"]::-moz-progress-bar { background: #cf222e; }
 
     /* Filters: status on its own row, then repo + limit + apply. */
     .toolbar { margin-bottom: var(--pico-block-spacing-vertical); }
