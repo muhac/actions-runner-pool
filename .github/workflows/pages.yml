@@ -1,0 +1,61 @@
+name: Pages
+
+# Build the GitHub Pages demo from the live dashboard template
+# (see scripts/build-demo.py for the patch strategy). Deploy only
+# from main; on PRs we still run the build so a template change
+# that breaks the patcher fails CI before it lands.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'internal/httpapi/handlers/templates/dashboard.html'
+      - 'internal/httpapi/handlers/templates/css/pico.green.min.css'
+      - 'scripts/build-demo.py'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'internal/httpapi/handlers/templates/dashboard.html'
+      - 'internal/httpapi/handlers/templates/css/pico.green.min.css'
+      - 'scripts/build-demo.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Sequential queue so a slow deploy can't be lapped by a newer one.
+# PR runs share the queue but skip the deploy job.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build demo
+        run: python3 scripts/build-demo.py site
+
+      # Always upload the artifact so PR builds verify the patcher
+      # produced a usable site/. The artifact is consumed by the
+      # deploy job on main pushes; on PRs it's just a build receipt.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
