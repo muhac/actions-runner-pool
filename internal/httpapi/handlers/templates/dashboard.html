@@ -141,13 +141,14 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    /* The repo column is the only flexible-width cell: every other
-       column is `nowrap` and content-sized, so width:100% under
-       `table-layout: auto` hands this column all leftover horizontal
-       space. No min-width — on narrow tables the column shrinks to
-       whatever's left, and `white-space: normal` wraps long names
-       rather than shoving the table sideways. */
-    .jobs-wrap td.main-cell { white-space: normal; width: 100%; }
+    /* Repo column inherits the table-wide `nowrap` so each line
+       (repo on top, job_name in the muted sub) stays single-line
+       and the column's natural minimum is the wider of the two
+       texts. width:100% under `table-layout: auto` lets the column
+       grow past that minimum to fill leftover horizontal space on
+       wide screens; the wrapper's overflow-x:auto handles the case
+       where the row truly can't fit the viewport. */
+    .jobs-wrap td.main-cell { width: 100%; }
     .jobs-wrap td.muted, .jobs-wrap .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
     .empty {
       padding: 2rem 1rem;
