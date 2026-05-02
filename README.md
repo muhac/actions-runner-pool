@@ -9,9 +9,8 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 * 🔐 **Self-hosted** — no external service dependency
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
+* 📊 **Built-in dashboard** — inspect jobs and runners (with prometheus metrics), and retry/cancel controls
 * 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
-* 📊 **Built-in dashboard** — inspect queue status, recent jobs, and retry/cancel controls
-* 📈 **Prometheus metrics** — scrape `/metrics` for jobs-by-status, runners-by-status, and the configured concurrency ceiling
 
 ## 🚀 Quick Start
 
