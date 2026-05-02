@@ -160,6 +160,7 @@
     .badge {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       padding: 0.15rem 0.55rem;
       border-radius: 999px;
       border: 1px solid var(--pico-muted-border-color);
@@ -167,6 +168,11 @@
       color: var(--pico-muted-color);
       font-size: 0.75rem;
       font-weight: 600;
+      /* Uniform width so the column doesn't shift between rows as
+         labels switch (pending/dispatched/in_progress/success/...).
+         Rare longer labels like `action_required` will stretch past
+         this floor and expand the column for that single row. */
+      min-width: 6rem;
     }
     /* Backgrounds are desaturated against the GitHub palette so the
        table row reads first and the status pill recedes; text/border
