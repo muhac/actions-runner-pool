@@ -581,10 +581,10 @@
       const wrap = document.createElement("div");
       wrap.className = "row-actions";
       if (job.status === "completed") {
-        wrap.appendChild(actionButton("Retry", "retry", job.id, ""));
+        wrap.appendChild(actionButton("Retry", "retry", job.id, "secondary outline"));
       }
       if (job.status === "pending" || job.status === "dispatched") {
-        wrap.appendChild(actionButton("Cancel", "cancel", job.id, "secondary outline"));
+        wrap.appendChild(actionButton("Cancel", "cancel", job.id, ""));
       }
       if (!wrap.children.length) {
         const span = document.createElement("span");
