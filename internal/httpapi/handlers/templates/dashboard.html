@@ -552,8 +552,12 @@
       if (job.conclusion && job.conclusion !== "success") {
         span.classList.add("bad");
       }
-      span.textContent = job.conclusion || job.status || "-";
+      span.textContent = formatBadgeLabel(job.conclusion || job.status || "-");
       return span;
+    }
+
+    function formatBadgeLabel(value) {
+      return String(value).replace(/_/g, " ");
     }
 
     function cell(child) {
