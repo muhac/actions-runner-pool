@@ -178,7 +178,9 @@
     .badge.bad         { color: #9b1c1c; border-color: #d8b9b6; background: #f1e3e1; }
 
     .row-actions { display: flex; gap: 0.4rem; }
-    .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; }
+    /* Pin the action buttons to the same min-width so Retry and
+       Cancel don't visually shift between rows as job status flips. */
+    .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; min-width: 4.5rem; }
 
     /* Auth + alert articles render compactly. */
     .auth-panel form {
