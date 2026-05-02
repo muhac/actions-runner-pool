@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
@@ -50,6 +51,16 @@ type Scheduler struct {
 	noInstallationCancelAge time.Duration
 	nameFn                  func(jobID int64) (string, string)
 	nowFn                   func() time.Time
+
+	// pendingTimers tracks cap-backoff re-enqueue timers created by
+	// dispatchWithContext so RunWithDrain can stop them on shutdown.
+	// Without this, an AfterFunc scheduled just before drain could
+	// fire and call Enqueue after RunWithDrain has already returned —
+	// the value would sit in jobCh forever (no reader) and any
+	// observer (e.g. tests, future drain wait) couldn't tell when
+	// the scheduler has truly settled.
+	timersMu      sync.Mutex
+	pendingTimers map[*time.Timer]struct{}
 }
 
 // New creates a new Scheduler.
@@ -73,6 +84,7 @@ func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *
 		noInstallationCancelAge: 1 * time.Minute,
 		nameFn:                  newNameFn(cfg.RunnerNamePrefix),
 		nowFn:                   time.Now,
+		pendingTimers:           map[*time.Timer]struct{}{},
 	}
 }
 
@@ -95,6 +107,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // runCtx stops accepting new jobs; drainCtx gives in-flight dispatches time to complete.
 // Pass the same context for both to get Run() behavior.
 func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
+	// Stop any cap-backoff timers still pending when we return so they
+	// don't fire (and Enqueue into a now-readerless jobCh) after the
+	// scheduler has shut down. See pendingTimers field comment.
+	defer s.stopPendingTimers()
 	s.replay(runCtx)
 	ticker := time.NewTicker(s.replayPeriod)
 	defer ticker.Stop()
@@ -115,6 +131,36 @@ func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 			// PendingJobs returns an empty slice in the steady state.
 			s.replay(runCtx)
 		}
+	}
+}
+
+// scheduleReEnqueue arms a one-shot timer that re-enqueues jobID
+// after capBackoff. The timer is added to pendingTimers up front and
+// removed when the closure fires, so a concurrent stopPendingTimers
+// call can race-free Stop() it during shutdown.
+func (s *Scheduler) scheduleReEnqueue(runCtx context.Context, jobID int64) {
+	var t *time.Timer
+	t = time.AfterFunc(s.capBackoff, func() {
+		s.timersMu.Lock()
+		delete(s.pendingTimers, t)
+		s.timersMu.Unlock()
+		if runCtx.Err() != nil {
+			return
+		}
+		s.Enqueue(jobID)
+	})
+	s.timersMu.Lock()
+	s.pendingTimers[t] = struct{}{}
+	s.timersMu.Unlock()
+}
+
+func (s *Scheduler) stopPendingTimers() {
+	s.timersMu.Lock()
+	timers := s.pendingTimers
+	s.pendingTimers = map[*time.Timer]struct{}{}
+	s.timersMu.Unlock()
+	for t := range timers {
+		t.Stop()
 	}
 }
 
@@ -169,12 +215,9 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 		// other jobs (and observing ctx.Done) instead of parking on a
 		// sleep here. AfterFunc fires on its own goroutine; if ctx is
 		// already cancelled by the time it runs, drop the re-enqueue.
-		time.AfterFunc(s.capBackoff, func() {
-			if runCtx.Err() != nil {
-				return
-			}
-			s.Enqueue(jobID)
-		})
+		// We track the timer so RunWithDrain can stop it on shutdown
+		// before it fires — see stopPendingTimers.
+		s.scheduleReEnqueue(runCtx, jobID)
 		return
 	}
 

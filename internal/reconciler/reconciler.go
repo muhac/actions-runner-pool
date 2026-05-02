@@ -537,6 +537,11 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 			continue
 		}
 		ours := known[ri.Repo] // nil set is fine — no active rows for this repo
+		// First pass: collect ghost candidates from GitHub's view that
+		// our top-of-sweep snapshot doesn't claim. Postpone the
+		// freshness recheck until we know there's actually something
+		// to delete, so we pay the DB read at most once per repo.
+		var candidates []github.RepoRunner
 		for _, gr := range runners {
 			// Only touch runners whose name matches our prefix —
 			// otherwise we'd reach into other deployments sharing
@@ -555,12 +560,22 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 				r.log.Debug("reconciler/github: skipping busy ghost runner", "repo", ri.Repo, "runner", gr.Name)
 				continue
 			}
-			stillActive, err := r.activeRunnerExists(ctx, ri.Repo, gr.Name)
-			if err != nil {
-				r.log.Error("reconciler/github: ListActiveRunners recheck failed; skipping delete", "repo", ri.Repo, "runner_name", gr.Name, "err", err)
-				continue
-			}
-			if stillActive {
+			candidates = append(candidates, gr)
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		// One fresh ListActiveRunners read per repo with candidates,
+		// shared across all of that repo's deletions, closes the
+		// "scheduler inserted a row during the GitHub round-trip"
+		// race without re-reading the whole table per candidate.
+		freshNames, err := r.activeRunnerNames(ctx, ri.Repo)
+		if err != nil {
+			r.log.Error("reconciler/github: ListActiveRunners recheck failed; skipping repo", "repo", ri.Repo, "err", err)
+			continue
+		}
+		for _, gr := range candidates {
+			if _, stillActive := freshNames[gr.Name]; stillActive {
 				r.log.Debug("reconciler/github: skipping runner found during active recheck", "repo", ri.Repo, "runner", gr.Name)
 				continue
 			}
@@ -576,17 +591,22 @@ func (r *Reconciler) sweepGitHubGhostRunners(ctx context.Context) {
 		"repos", len(repos), "deleted", totalDeleted)
 }
 
-func (r *Reconciler) activeRunnerExists(ctx context.Context, repo, runnerName string) (bool, error) {
+// activeRunnerNames returns the set of runner names currently in the
+// active table for a single repo. Used by the GitHub-side ghost sweep
+// as a per-repo recheck right before issuing deletes — see the
+// freshNames usage there for the race it guards.
+func (r *Reconciler) activeRunnerNames(ctx context.Context, repo string) (map[string]struct{}, error) {
 	rows, err := r.store.ListActiveRunners(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
+	out := map[string]struct{}{}
 	for _, row := range rows {
-		if row.Repo == repo && row.RunnerName == runnerName {
-			return true, nil
+		if row.Repo == repo {
+			out[row.RunnerName] = struct{}{}
 		}
 	}
-	return false, nil
+	return out, nil
 }
 
 // staleInProgressListLimit caps the per-tick read size. In normal

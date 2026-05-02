@@ -111,8 +111,21 @@ func run() error {
 		return err
 	}
 	if signalCtx.Err() != nil {
-		schedulerWG.Wait()
-		log.Info("scheduler drain completed")
+		// Bound the final wait: drainCancel above already signalled the
+		// scheduler, but if a dispatch goroutine is wedged on a syscall
+		// or unbounded I/O that doesn't observe ctx, we don't want main
+		// to hang forever. Give it the same drain budget then give up.
+		done := make(chan struct{})
+		go func() {
+			schedulerWG.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			log.Info("scheduler drain completed")
+		case <-time.After(cfg.ShutdownDrainTimeout):
+			log.Warn("scheduler drain timed out; exiting with goroutines still running", "timeout", cfg.ShutdownDrainTimeout)
+		}
 	}
 	return nil
 }
