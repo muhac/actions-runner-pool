@@ -132,7 +132,7 @@
     .jobs-title { font-size: 1rem; font-weight: 700; }
     .jobs-count { color: var(--pico-muted-color); font-size: 0.85rem; }
     .jobs-wrap { overflow-x: auto; }
-    .jobs-wrap table { margin: 0; min-width: 820px; }
+    .jobs-wrap table { margin: 0; }
     .jobs-wrap th, .jobs-wrap td { white-space: nowrap; }
     .jobs-wrap th {
       color: var(--pico-muted-color);
@@ -142,12 +142,12 @@
       text-transform: uppercase;
     }
     /* The repo column is the only flexible-width cell: every other
-       column is `nowrap` and content-sized, so giving this one
-       width:100% lets `table-layout: auto` hand it all the leftover
-       space. min-width keeps it from collapsing on narrow tables;
-       white-space:normal lets pathological long names wrap rather
-       than shoving the table sideways. */
-    .jobs-wrap td.main-cell { white-space: normal; min-width: 220px; width: 100%; }
+       column is `nowrap` and content-sized, so width:100% under
+       `table-layout: auto` hands this column all leftover horizontal
+       space. No min-width — on narrow tables the column shrinks to
+       whatever's left, and `white-space: normal` wraps long names
+       rather than shoving the table sideways. */
+    .jobs-wrap td.main-cell { white-space: normal; width: 100%; }
     .jobs-wrap td.muted, .jobs-wrap .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
     .empty {
       padding: 2rem 1rem;
