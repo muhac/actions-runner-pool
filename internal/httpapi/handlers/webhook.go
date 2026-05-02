@@ -149,16 +149,31 @@ func (h *WebhookHandler) handleInstallation(w http.ResponseWriter, r *http.Reque
 		// reversed, any racing insert lands AFTER the mapping is
 		// gone, so dispatch's "no installation -> cancel" fallback
 		// catches it.
+		//
+		// On store failure we MUST return 5xx so GitHub redelivers:
+		// silently 200ing leaves the repo→installation mapping in
+		// place, and dispatch will then keep trying to mint tokens
+		// against an installation that no longer exists.
+		var failed bool
 		for _, repo := range ev.Repositories {
 			if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
 				h.logError("remove repo->installation after installation deleted", err)
+				failed = true
+				continue
 			}
 			n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
 			if err != nil {
 				h.logError("cancel pending jobs after installation deleted", err)
-			} else if n > 0 && h.Log != nil {
+				failed = true
+				continue
+			}
+			if n > 0 && h.Log != nil {
 				h.Log.Info("installation deleted: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
 			}
+		}
+		if failed {
+			http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		if h.Log != nil {
 			h.Log.Info("installation deleted", "installation_id", ev.Installation.ID, "repos", len(ev.Repositories))
@@ -193,6 +208,11 @@ func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r
 			h.logError("upsert repo->installation", err)
 		}
 	}
+	// Same rationale as the installation:deleted path — a store
+	// failure here must surface as 5xx so GitHub redelivers, otherwise
+	// dispatch keeps minting tokens for a repo that's no longer in the
+	// installation.
+	var removeFailed bool
 	for _, repo := range ev.RepositoriesRemoved {
 		// Remove BEFORE cancel so a racing queued webhook lands after
 		// the mapping is gone and falls into dispatch's
@@ -201,13 +221,22 @@ func (h *WebhookHandler) handleInstallationRepositories(w http.ResponseWriter, r
 		// require dispatch to clean it up later.
 		if err := h.Store.RemoveRepoInstallation(r.Context(), repo.FullName); err != nil {
 			h.logError("remove repo->installation", err)
+			removeFailed = true
+			continue
 		}
 		n, err := h.Store.CancelPendingJobsForRepo(r.Context(), repo.FullName)
 		if err != nil {
 			h.logError("cancel pending jobs after repo removed", err)
-		} else if n > 0 && h.Log != nil {
+			removeFailed = true
+			continue
+		}
+		if n > 0 && h.Log != nil {
 			h.Log.Info("repo removed from installation: cancelled pending jobs", "repo", repo.FullName, "cancelled", n)
 		}
+	}
+	if removeFailed {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
