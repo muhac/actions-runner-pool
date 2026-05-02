@@ -12,6 +12,8 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 * 📊 **Built-in dashboard** — inspect jobs and runners (with prometheus metrics), and retry/cancel controls
 * 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
 
+> 👉 **[Try the dashboard live](https://muhac.github.io/actions-runner-pool/demo/)** — same UI, mock data, no backend. Click Cancel / Retry to see how the dashboard reacts.
+
 ## 🚀 Quick Start
 
 ### 1. Run gharp
