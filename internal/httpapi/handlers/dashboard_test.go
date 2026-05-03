@@ -23,6 +23,9 @@ func TestDashboard_RendersPageShell(t *testing.T) {
 	body := rr.Body.String()
 	for _, want := range []string{
 		`id="app"`,
+		`id="authForm"`,
+		`type="submit"`,
+		`authForm.addEventListener("submit"`,
 		`/stats`,
 		`/jobs`,
 		`sessionStorage`,

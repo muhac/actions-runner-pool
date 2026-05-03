@@ -230,9 +230,9 @@
 
   <main id="app" class="container">
     <article id="authPanel" class="auth-panel" hidden>
-      <form>
+      <form id="authForm">
         <input id="tokenInput" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
-        <button id="saveTokenButton" type="button">Save token</button>
+        <button id="saveTokenButton" type="submit">Save token</button>
         <button id="clearTokenButton" type="button" class="secondary outline">Clear</button>
       </form>
     </article>
@@ -342,6 +342,7 @@
 
     const el = {
       authPanel: document.getElementById("authPanel"),
+      authForm: document.getElementById("authForm"),
       tokenInput: document.getElementById("tokenInput"),
       saveTokenButton: document.getElementById("saveTokenButton"),
       clearTokenButton: document.getElementById("clearTokenButton"),
@@ -632,6 +633,12 @@
       el.clearStatusButton.disabled = !anyChecked;
     }
 
+    function saveTokenAndRefresh() {
+      setToken(el.tokenInput.value.trim());
+      el.authPanel.hidden = true;
+      refresh();
+    }
+
     el.tokenButton.addEventListener("click", showAuth);
     el.refreshButton.addEventListener("click", refresh);
     el.applyFiltersButton.addEventListener("click", refresh);
@@ -652,10 +659,9 @@
         refresh();
       }
     });
-    el.saveTokenButton.addEventListener("click", () => {
-      setToken(el.tokenInput.value.trim());
-      el.authPanel.hidden = true;
-      refresh();
+    el.authForm.addEventListener("submit", event => {
+      event.preventDefault();
+      saveTokenAndRefresh();
     });
     el.clearTokenButton.addEventListener("click", () => {
       setToken("");
