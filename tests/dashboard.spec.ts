@@ -44,6 +44,21 @@ const JOBS_TWO = {
   ],
 };
 
+const JOBS_WITH_COMPLETED = {
+  jobs: [
+    {
+      id: 1,
+      repo: "org/repo-a",
+      job_name: "build",
+      workflow: "CI",
+      status: "completed",
+      conclusion: "success",
+      runner_name: "runner-abc",
+      updated_at: new Date().toISOString(),
+    },
+  ],
+};
+
 async function mockApis(
   route: Route,
   stats = STATS_EMPTY,
@@ -145,13 +160,19 @@ test("filtering by status sends correct query params", async ({ page }) => {
 
   await page.goto("/");
 
-  // Wait for the filter request after clicking Apply.
-  const jobsRequest = page.waitForRequest((req) => req.url().includes("/jobs") && req.url().includes("status="));
+  // A checkbox change triggers refresh automatically, so wait for the first
+  // request that already includes both selected statuses.
+  const jobsRequest = page.waitForRequest((req) => {
+    const url = req.url();
+    return url.includes("/jobs") && url.includes("status=pending") && url.includes("status=in_progress");
+  });
 
   // Check "pending" checkbox.
   await page.locator('input[name=status][value=pending]').check();
   // Check "in_progress" checkbox.
   await page.locator('input[name=status][value=in_progress]').check();
+  await expect(page.locator('input[name=status][value=pending]')).toBeChecked();
+  await expect(page.locator('input[name=status][value=in_progress]')).toBeChecked();
   // Click Apply to trigger the request.
   await page.locator("#applyFiltersButton").click();
 
@@ -250,7 +271,7 @@ test("retry button calls POST /jobs/:id/retry", async ({ page }) => {
     r.fulfill({ contentType: "application/json", body: JSON.stringify(STATS_EMPTY) })
   );
   await page.route("**/jobs**", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify(JOBS_TWO) })
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(JOBS_WITH_COMPLETED) })
   );
 
   let retryCalled = false;
