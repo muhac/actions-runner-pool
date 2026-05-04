@@ -46,6 +46,11 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   smoke:
     name: Smoke Test
     runs-on: ubuntu-latest
