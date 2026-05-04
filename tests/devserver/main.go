@@ -26,7 +26,9 @@ func main() {
 	mux.HandleFunc("GET /{$}", dashboard.Get)
 	mux.Handle("GET /css/", handlers.CSSHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, "ok")
+		if _, err := fmt.Fprintln(w, "ok"); err != nil {
+			log.Printf("write healthz response: %v", err)
+		}
 	})
 
 	addr := "127.0.0.1:" + port
