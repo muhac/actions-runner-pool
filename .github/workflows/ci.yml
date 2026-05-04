@@ -103,3 +103,41 @@ jobs:
 
       - name: fuzz webhook handler
         run: go test -fuzz=FuzzWebhook_Handler -fuzztime=30s ./internal/httpapi/handlers/
+
+  playwright:
+    name: Playwright Tests
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: tests
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: tests
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: tests
+        run: npm test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/playwright-report/
+          retention-days: 14

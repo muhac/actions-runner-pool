@@ -47,3 +47,9 @@ go.work.sum
 # Build output
 /gharp
 /dist/
+
+# Playwright tests
+tests/node_modules/
+tests/playwright-report/
+/devserver
+test-results/
