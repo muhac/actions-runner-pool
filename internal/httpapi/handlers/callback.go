@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
 	"github.com/muhac/actions-runner-pool/internal/github"
@@ -78,7 +79,7 @@ func (h *CallbackHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Path:     "/github/app/callback",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   strings.HasPrefix(h.Cfg.BaseURL, "https://"),
 	})
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
