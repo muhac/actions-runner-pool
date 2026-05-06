@@ -78,6 +78,7 @@ func (h *CallbackHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Path:     "/github/app/callback",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   true,
 	})
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
