@@ -132,6 +132,29 @@ func TestCallback_ClearsStateCookie(t *testing.T) {
 	for _, c := range rr.Result().Cookies() {
 		if c.Name == stateCookie && c.MaxAge < 0 {
 			cleared = true
+			if !c.Secure {
+				t.Errorf("state cookie should be Secure when BaseURL is https")
+			}
+		}
+	}
+	if !cleared {
+		t.Errorf("state cookie not cleared (MaxAge<0); cookies=%v", rr.Result().Cookies())
+	}
+}
+
+func TestCallback_ClearsStateCookie_NotSecureOnHTTPBaseURL(t *testing.T) {
+	conv := &fakeConverter{creds: &github.AppCredentials{Slug: "x"}}
+	h := newCallbackHandler(t, &fakeStore{}, conv)
+	h.Cfg.BaseURL = "http://example.test"
+	rr := doCallback(t, h, "the-code", "match", "match")
+
+	cleared := false
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == stateCookie && c.MaxAge < 0 {
+			cleared = true
+			if c.Secure {
+				t.Errorf("state cookie should NOT be Secure when BaseURL is http")
+			}
 		}
 	}
 	if !cleared {
