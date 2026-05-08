@@ -166,7 +166,7 @@ sequenceDiagram
 
   GH->>WH: 1) POST /github/webhook (workflow_job queued)
     Note over WH: 2) Verify HMAC over raw body (constant-time compare)
-  Note over WH: 3) Parse payload and apply public-repo + label admission filters<br/>(label admission has two paths: strict match against RUNNER_LABELS, or<br/>prefix match against RUNNER_DYNAMIC_LABEL_PREFIXES for routing-only labels)
+  Note over WH: 3) Parse payload and apply public-repo + label admission filters<br/>(label admission has three paths: implicit self-hosted, strict match against<br/>RUNNER_LABELS, or prefix match against RUNNER_DYNAMIC_LABEL_PREFIXES for routing-only labels)
   Note over WH: 4) Insert job row with dedupe on job id
   Note over WH: 5) Push job id to channel when possible
   WH-->>GH: 200 OK (target: under ~3s typical, under 10s hard)
@@ -206,7 +206,7 @@ sequenceDiagram
 - **Registration tokens are single-use under `EPHEMERAL=1`.** Don't try to cache them. Mint one per `docker run`.
 - **Installation tokens can be cached per installation for ~55 minutes** (1h TTL minus a safety margin). The `internal/github` client should hold a small in-memory cache keyed by installation_id.
 - **Concurrency cap is enforced before minting tokens**, not after — otherwise we waste GitHub API budget on jobs we're about to refuse.
-- **Filter early on public repos and labels.** Queued public-repo jobs are dropped by default unless `ALLOW_PUBLIC_REPOS=true` or the repo appears in `REPO_ALLOWLIST`. Lifecycle events still update already-admitted jobs. If the workflow's `runs-on` labels are not satisfiable from configured runner labels or allowed dynamic label prefixes, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
+- **Filter early on public repos and labels.** Queued public-repo jobs are dropped by default unless `ALLOW_PUBLIC_REPOS=true` or the repo appears in `REPO_ALLOWLIST`. Lifecycle events still update already-admitted jobs. If the workflow's `runs-on` labels are not satisfiable from configured runner labels, allowed dynamic label prefixes, or the implicit `self-hosted` label, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
 
 #### What we deliberately don't do
 
