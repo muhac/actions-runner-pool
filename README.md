@@ -85,7 +85,6 @@ jobs:
   build:
     runs-on:
       - self-hosted
-      - "gharp-build-${{ github.run_id }}-${{ github.run_attempt }}"
     steps:
       - uses: actions/checkout@v4
       - run: echo "hello from $(hostname)"
