@@ -116,7 +116,7 @@ jobs:
           go-version: stable
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: lts/*
           cache: npm
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: tests/playwright-report/
