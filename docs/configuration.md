@@ -38,6 +38,26 @@ same.
 | `DOCKER_HOST` | _(unset)_ | Docker daemon endpoint. Unset = use the default socket the Docker SDK picks (`/var/run/docker.sock` on Linux). Override for remote daemons (e.g. `tcp://docker:2375`). |
 | `RUNNER_COMMAND` | _(see below)_ | JSON array of argv (no shell). Required placeholders are validated at startup: `{{.ContainerName}}`, `{{.RegistrationToken}}`, `{{.RunnerName}}`, `{{.RepoURL}}`, `{{.Labels}}`. Optional: `{{.Image}}`. Empty array, non-array JSON, or a missing required placeholder cause startup to fail. |
 
+### Picking dynamic label prefixes
+
+`RUNNER_DYNAMIC_LABEL_PREFIXES` is a routing escape hatch, not a
+capability declaration. Use it for, and only for, per-job labels that
+the workflow generates at run time:
+
+- ✅ **Per-job isolation.** A label like
+  `gharp-build-${{ github.run_id }}-${{ github.run_attempt }}` makes
+  GitHub bind that one queued job to the runner gharp launches for it,
+  eliminating the same-label assignment race between jobs in the same
+  workflow.
+- ❌ **Don't declare hardware/OS/runtime requirements through dynamic
+  prefixes.** A label like `gharp-gpu` would be admitted without any
+  guarantee the runner host actually has a GPU. Capability gating still
+  belongs in `RUNNER_LABELS`, which is matched strictly.
+- ❌ **Don't widen the prefix to a generic namespace** like `ci-` or
+  `runner-`. Any `runs-on: [ci-foo]` from any installed repo would be
+  admitted unconditionally — you lose the public-repo / capability
+  guard for those labels. Keep the prefix narrow and gharp-owned.
+
 Default `RUNNER_COMMAND`:
 
 ```text
