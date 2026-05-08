@@ -166,7 +166,7 @@ sequenceDiagram
 
   GH->>WH: 1) POST /github/webhook (workflow_job queued)
     Note over WH: 2) Verify HMAC over raw body (constant-time compare)
-  Note over WH: 3) Parse payload and apply public-repo + label admission filters<br/>(label admission has three paths: implicit self-hosted, strict match against<br/>RUNNER_LABELS, or prefix match against RUNNER_DYNAMIC_LABEL_PREFIXES for routing-only labels)
+  Note over WH: 3) Parse payload and apply public-repo + label admission filters<br/>(label admission has three paths: implicit self-hosted, strict match againstRUNNER_LABELS,<br/>or prefix match against RUNNER_DYNAMIC_LABEL_PREFIXES for routing-only labels)
   Note over WH: 4) Insert job row with dedupe on job id
   Note over WH: 5) Push job id to channel when possible
   WH-->>GH: 200 OK (target: under ~3s typical, under 10s hard)
