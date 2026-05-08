@@ -224,6 +224,14 @@ change any of them, delete the App on GitHub, wipe the gharp volume
   a job is accepted only if every label in its `runs-on` set is
   satisfiable from `RUNNER_LABELS`, `RUNNER_DYNAMIC_LABEL_PREFIXES`, or
   the implicit `self-hosted` label.
+- **Parallel jobs in the same workflow run serially, or one runner picks
+  up a job meant for another.** GitHub matches queued jobs to idle
+  runners by labels alone, so when several jobs share the same `runs-on`
+  set, the first runner to finish startup wins the next assignment —
+  regardless of which `queued` event triggered its launch. Add a per-job
+  dynamic label such as `gharp-<job>-${{ github.run_id }}-${{ github.run_attempt }}`
+  to `runs-on` so each spawned runner is bound to one specific job. The
+  `gharp-` prefix is admitted by default; see § 5 for the full snippet.
 - **Public repo jobs are ignored.** This is the default safety guard.
   Set `REPO_ALLOWLIST=owner/repo` for selected public repos, or
   `ALLOW_PUBLIC_REPOS=true` to allow all public repos where the App is
