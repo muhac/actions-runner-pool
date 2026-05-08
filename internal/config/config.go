@@ -32,9 +32,10 @@ type Config struct {
 	// RunnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
-	RunnerLabelSet   map[string]struct{}
-	AllowPublicRepos bool
-	RepoAllowlist    []string
+	RunnerLabelSet             map[string]struct{}
+	RunnerDynamicLabelPrefixes []string
+	AllowPublicRepos           bool
+	RepoAllowlist              []string
 	// RepoAllowlistSet is the precomputed lower-cased + trimmed set of
 	// public repositories allowed even when AllowPublicRepos is false.
 	RepoAllowlistSet     map[string]struct{}
@@ -107,9 +108,12 @@ func Load() (*Config, error) {
 		GitHubAPIBase:        strings.TrimRight(envOr("GITHUB_API_BASE", "https://api.github.com"), "/"),
 		GitHubWebBase:        strings.TrimRight(envOr("GITHUB_WEB_BASE", "https://github.com"), "/"),
 		RunnerLabels:         parseLabels(os.Getenv("RUNNER_LABELS")),
-		AllowPublicRepos:     envBool("ALLOW_PUBLIC_REPOS"),
-		RepoAllowlist:        parseList(os.Getenv("REPO_ALLOWLIST")),
-		LogLevel:             parseLogLevel(envOr("LOG_LEVEL", "info")),
+		RunnerDynamicLabelPrefixes: parseDynamicLabelPrefixes(
+			os.Getenv("RUNNER_DYNAMIC_LABEL_PREFIXES"),
+		),
+		AllowPublicRepos: envBool("ALLOW_PUBLIC_REPOS"),
+		RepoAllowlist:    parseList(os.Getenv("REPO_ALLOWLIST")),
+		LogLevel:         parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}
 
 	if c.BaseURL == "" {
@@ -155,6 +159,9 @@ func Load() (*Config, error) {
 	c.RunnerLabelSet = make(map[string]struct{}, len(c.RunnerLabels))
 	for _, l := range c.RunnerLabels {
 		c.RunnerLabelSet[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+	}
+	for i, prefix := range c.RunnerDynamicLabelPrefixes {
+		c.RunnerDynamicLabelPrefixes[i] = strings.ToLower(strings.TrimSpace(prefix))
 	}
 	c.RepoAllowlistSet = make(map[string]struct{}, len(c.RepoAllowlist))
 	for _, repo := range c.RepoAllowlist {
@@ -261,6 +268,13 @@ func envDuration(key string, def time.Duration) time.Duration {
 func parseLabels(s string) []string {
 	if s == "" {
 		return []string{"self-hosted"}
+	}
+	return parseList(s)
+}
+
+func parseDynamicLabelPrefixes(s string) []string {
+	if s == "" {
+		return []string{"gharp-"}
 	}
 	return parseList(s)
 }

@@ -29,6 +29,10 @@ func (s *spyEnqueuer) Enqueue(jobID int64) {
 }
 
 func newWebhookHandler(t *testing.T, st store.Store, sch *spyEnqueuer, runnerLabels []string) *WebhookHandler {
+	return newWebhookHandlerWithDynamicPrefixes(t, st, sch, runnerLabels, []string{"gharp-"})
+}
+
+func newWebhookHandlerWithDynamicPrefixes(t *testing.T, st store.Store, sch *spyEnqueuer, runnerLabels []string, dynamicPrefixes []string) *WebhookHandler {
 	t.Helper()
 	// Mirror what config.Load does: precompute the lower-cased label
 	// set so the handler reads RunnerLabelSet, not RunnerLabels.
@@ -36,8 +40,16 @@ func newWebhookHandler(t *testing.T, st store.Store, sch *spyEnqueuer, runnerLab
 	for _, l := range runnerLabels {
 		set[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
 	}
+	for i, prefix := range dynamicPrefixes {
+		dynamicPrefixes[i] = strings.ToLower(strings.TrimSpace(prefix))
+	}
 	return &WebhookHandler{
-		Cfg:       &config.Config{BaseURL: "https://example.test", RunnerLabels: runnerLabels, RunnerLabelSet: set},
+		Cfg: &config.Config{
+			BaseURL:                    "https://example.test",
+			RunnerLabels:               runnerLabels,
+			RunnerLabelSet:             set,
+			RunnerDynamicLabelPrefixes: dynamicPrefixes,
+		},
 		Store:     st,
 		Scheduler: sch,
 	}
@@ -392,6 +404,50 @@ func TestWebhook_LabelFilter_MatchProceeds(t *testing.T) {
 	}
 }
 
+func TestWebhook_LabelFilter_DynamicPrefixProceeds(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted", "gharp-build-123-1"]},
+		"repository": {"full_name": "alice/repo", "private": true},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, []string{"self-hosted"})
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 1 || st.insertedJobs[0].Labels != "self-hosted,gharp-build-123-1" {
+		t.Errorf("InsertJobIfNew not called as expected: %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 1 {
+		t.Errorf("expected Enqueue, got %d", sch.calls.Load())
+	}
+}
+
+func TestWebhook_LabelFilter_UnknownDynamicPrefixDrops(t *testing.T) {
+	body := []byte(`{
+		"action": "queued",
+		"workflow_job": {"id": 12345, "labels": ["self-hosted", "other-build-123-1"]},
+		"repository": {"full_name": "alice/repo", "private": true},
+		"installation": {"id": 99}
+	}`)
+	st := storeWithSecret(testWebhookSecret)
+	sch := &spyEnqueuer{}
+	h := newWebhookHandler(t, st, sch, []string{"self-hosted"})
+	rr := postWebhook(t, h, "workflow_job", body, sign(testWebhookSecret, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if len(st.insertedJobs) != 0 {
+		t.Errorf("expected no insert, got %+v", st.insertedJobs)
+	}
+	if sch.calls.Load() != 0 {
+		t.Errorf("expected no Enqueue, got %d", sch.calls.Load())
+	}
+}
+
 func TestWebhook_InProgress_BindsRunnerAndMarksBusy(t *testing.T) {
 	body := []byte(`{
 		"action": "in_progress",
@@ -593,8 +649,9 @@ func TestWebhook_EmptySecret_RejectsSignature(t *testing.T) {
 // labelsMatch enforces GitHub's cumulative runs-on semantics: a job is
 // only accepted if every required label can be satisfied by this pool.
 // 'self-hosted' is implicit (GitHub auto-assigns it) so it's always
-// satisfiable. Empty configured = serve everything (legacy behavior
-// for operators who haven't set RUNNER_LABELS).
+// satisfiable. Labels matching a dynamic prefix are satisfiable without
+// predeclaring every generated value in RUNNER_LABELS. Empty configured =
+// serve everything (legacy behavior for direct callers/tests).
 func TestLabelsMatch_SupersetSemantics(t *testing.T) {
 	makeSet := func(labels []string) map[string]struct{} {
 		out := make(map[string]struct{}, len(labels))
@@ -607,22 +664,26 @@ func TestLabelsMatch_SupersetSemantics(t *testing.T) {
 		name       string
 		runsOn     []string
 		configured []string
+		dynamic    []string
 		want       bool
 	}{
 		// The original failure mode: pool advertises self-hosted, job
 		// also wants gpu — must REJECT (current code accepted it,
 		// leaving a ghost runner GitHub never bound).
-		{"requires-extra-label", []string{"self-hosted", "gpu"}, []string{"self-hosted"}, false},
-		{"all-required-present", []string{"self-hosted", "gpu"}, []string{"gpu"}, true},
-		{"only-self-hosted", []string{"self-hosted"}, []string{}, true},
-		{"empty-configured-serves-everything", []string{"gpu", "linux"}, nil, true},
-		{"case-insensitive-match", []string{"Self-Hosted", "GPU"}, []string{"gpu"}, true},
-		{"explicit-self-hosted-not-required-in-cfg", []string{"self-hosted"}, []string{"linux"}, true},
-		{"job-with-no-labels-trivially-satisfied", nil, []string{"gpu"}, true},
+		{"requires-extra-label", []string{"self-hosted", "gpu"}, []string{"self-hosted"}, nil, false},
+		{"all-required-present", []string{"self-hosted", "gpu"}, []string{"gpu"}, nil, true},
+		{"only-self-hosted", []string{"self-hosted"}, []string{}, nil, true},
+		{"empty-configured-serves-everything", []string{"gpu", "linux"}, nil, nil, true},
+		{"case-insensitive-match", []string{"Self-Hosted", "GPU"}, []string{"gpu"}, nil, true},
+		{"explicit-self-hosted-not-required-in-cfg", []string{"self-hosted"}, []string{"linux"}, nil, true},
+		{"job-with-no-labels-trivially-satisfied", nil, []string{"gpu"}, nil, true},
+		{"dynamic-prefix-satisfies-label", []string{"self-hosted", "gharp-build-123-1"}, []string{"self-hosted"}, []string{"gharp-"}, true},
+		{"dynamic-prefix-case-insensitive-label", []string{"self-hosted", "GHARP-build-123-1"}, []string{"self-hosted"}, []string{"gharp-"}, true},
+		{"unknown-dynamic-prefix-rejected", []string{"self-hosted", "other-build-123-1"}, []string{"self-hosted"}, []string{"gharp-"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := labelsMatch(tc.runsOn, makeSet(tc.configured)); got != tc.want {
+			if got := labelsMatch(tc.runsOn, makeSet(tc.configured), tc.dynamic); got != tc.want {
 				t.Fatalf("labelsMatch(%v, %v) = %v, want %v", tc.runsOn, tc.configured, got, tc.want)
 			}
 		})
