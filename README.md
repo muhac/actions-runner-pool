@@ -83,17 +83,27 @@ Pick the repos (or "All repositories") you want runners for and submit.
 ```yaml
 jobs:
   build:
-    runs-on: [self-hosted]
+    runs-on:
+      - self-hosted
+      - "gharp-build-${{ github.run_id }}-${{ github.run_attempt }}"
     steps:
       - uses: actions/checkout@v4
       - run: echo "hello from $(hostname)"
+
+  test:
+    runs-on:
+      - self-hosted
+      - "gharp-test-${{ github.run_id }}-${{ github.run_attempt }}"
+    steps:
+      - run: echo "tests from $(hostname)"
 ```
 
 Every `workflow_job` whose `runs-on` set is fully covered by
 `RUNNER_LABELS` (default `self-hosted`; `self-hosted` is implicit on
-every self-hosted runner so you don't need to list it) will get a
-fresh runner. Jobs requiring a label this pool doesn't advertise are
-dropped — see [`docs/configuration.md`](docs/configuration.md).
+every self-hosted runner so you don't need to list it) or a configured
+dynamic label prefix (default `gharp-`) will get a fresh runner. Jobs
+requiring a label this pool doesn't advertise are dropped — see
+[`docs/configuration.md`](docs/configuration.md).
 
 For the full deployment guide (from-source build, docker compose,
 volumes, upgrades, ops APIs, troubleshooting), see [`docs/deploy.md`](docs/deploy.md).

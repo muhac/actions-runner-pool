@@ -206,7 +206,7 @@ sequenceDiagram
 - **Registration tokens are single-use under `EPHEMERAL=1`.** Don't try to cache them. Mint one per `docker run`.
 - **Installation tokens can be cached per installation for ~55 minutes** (1h TTL minus a safety margin). The `internal/github` client should hold a small in-memory cache keyed by installation_id.
 - **Concurrency cap is enforced before minting tokens**, not after — otherwise we waste GitHub API budget on jobs we're about to refuse.
-- **Filter early on public repos and labels.** Queued public-repo jobs are dropped by default unless `ALLOW_PUBLIC_REPOS=true` or the repo appears in `REPO_ALLOWLIST`. Lifecycle events still update already-admitted jobs. If the workflow's `runs-on` labels are not satisfiable from configured runner labels, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
+- **Filter early on public repos and labels.** Queued public-repo jobs are dropped by default unless `ALLOW_PUBLIC_REPOS=true` or the repo appears in `REPO_ALLOWLIST`. Lifecycle events still update already-admitted jobs. If the workflow's `runs-on` labels are not satisfiable from configured runner labels or allowed dynamic label prefixes, drop the event in step 3 — don't even insert into `jobs`. Prevents the queue filling with jobs we'll never serve.
 
 #### What we deliberately don't do
 
@@ -223,6 +223,7 @@ When `queued` fires we don't know which runner GitHub will pick — we only know
 This means:
 
 - **Two `queued` events arriving close together start two runners.** GitHub may assign job A to runner B and job B to runner A — perfectly fine, the labels match. The mapping `job_id → runner_id` only becomes known when `in_progress` arrives.
+- **Dynamic labels can narrow this race.** Jobs can include a generated label such as `gharp-build-${{ github.run_id }}-${{ github.run_attempt }}`. The webhook admits labels with configured dynamic prefixes (default `gharp-`), and dispatch registers the runner with the job's full label set, so GitHub only assigns jobs carrying that same generated label.
 - **Idle runners can be claimed by jobs that arrived before they were spawned.** If a job sat queued for 30 seconds before our runner came up, the runner immediately picks it up. This is *desired* behaviour, not a bug.
 - **A runner can fail to claim any job.** If three jobs are queued and we spawn three runners, but one runner finishes startup after GitHub has already assigned all three jobs to the first two (because the second runner finished both quickly), the third runner sits idle. Under `EPHEMERAL=1` an idle runner waits for a job indefinitely — which is the source of "ghost runners" if we don't intervene.
 

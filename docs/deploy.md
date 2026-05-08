@@ -127,7 +127,8 @@ For the underlying flow and the security caveats, see
 [`architecture.md` § 5](architecture.md).
 
 You're done. From this point, every `workflow_job` whose `runs-on` set
-is satisfiable from `RUNNER_LABELS` will get a fresh runner.
+is satisfiable from `RUNNER_LABELS` or `RUNNER_DYNAMIC_LABEL_PREFIXES`
+will get a fresh runner.
 
 ## 5. Verify end-to-end
 
@@ -156,6 +157,28 @@ docker ps
 
 The runner container should disappear within a few seconds of the job
 finishing in the GitHub UI (it's `--rm` + `EPHEMERAL=1`).
+
+To reduce same-label assignment races between jobs in the same workflow,
+add a per-job dynamic label. Labels starting with `gharp-` are accepted
+by default and do not need to be listed in `RUNNER_LABELS`:
+
+```yaml
+jobs:
+  build:
+    runs-on:
+      - self-hosted
+      - "gharp-build-${{ github.run_id }}-${{ github.run_attempt }}"
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "build from $(hostname)"
+
+  test:
+    runs-on:
+      - self-hosted
+      - "gharp-test-${{ github.run_id }}-${{ github.run_attempt }}"
+    steps:
+      - run: echo "tests from $(hostname)"
+```
 
 ## Operations
 
@@ -199,7 +222,8 @@ change any of them, delete the App on GitHub, wipe the gharp volume
   old App, or vice versa. Re-run `/setup`.
 - **Runners start but never pick up the job.** Check `RUNNER_LABELS` —
   a job is accepted only if every label in its `runs-on` set is
-  satisfiable from `RUNNER_LABELS` (or is the implicit `self-hosted`).
+  satisfiable from `RUNNER_LABELS`, `RUNNER_DYNAMIC_LABEL_PREFIXES`, or
+  the implicit `self-hosted` label.
 - **Public repo jobs are ignored.** This is the default safety guard.
   Set `REPO_ALLOWLIST=owner/repo` for selected public repos, or
   `ALLOW_PUBLIC_REPOS=true` to allow all public repos where the App is
