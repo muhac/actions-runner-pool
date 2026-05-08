@@ -388,6 +388,36 @@ func TestLoad_RunnerLabels(t *testing.T) {
 	}
 }
 
+func TestLoad_RunnerDynamicLabelPrefixes(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want []string
+	}{
+		{"unset-defaults-gharp", "", []string{"gharp-"}},
+		{"single", "team-", []string{"team-"}},
+		{"multi-with-spaces-and-case", " Gharp-, Team- ", []string{"gharp-", "team-"}},
+		{"empty-segments-skipped", ",,foo-,,bar-,", []string{"foo-", "bar-"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"BASE_URL": "https://example.test"}
+			if tc.set != "" {
+				env["RUNNER_DYNAMIC_LABEL_PREFIXES"] = tc.set
+			}
+			withEnv(t, env, func() {
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if !equalStrings(c.RunnerDynamicLabelPrefixes, tc.want) {
+					t.Errorf("RunnerDynamicLabelPrefixes = %v, want %v", c.RunnerDynamicLabelPrefixes, tc.want)
+				}
+			})
+		})
+	}
+}
+
 func TestLoad_AllowPublicRepos(t *testing.T) {
 	cases := []struct {
 		name string

@@ -250,7 +250,7 @@ func (h *WebhookHandler) handleWorkflowJob(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !labelsMatch(ev.WorkflowJob.Labels, h.Cfg.RunnerLabelSet) {
+	if !labelsMatch(ev.WorkflowJob.Labels, h.Cfg.RunnerLabelSet, h.Cfg.RunnerDynamicLabelPrefixes) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -371,16 +371,16 @@ func repoIsPublic(repo scheduler.Repository) bool {
 }
 
 // labelsMatch returns true if every job runs-on label can be satisfied
-// by this pool — i.e. job.runs_on ⊆ configured (with the implicit
-// "self-hosted" label always considered satisfied because GitHub
-// assigns it to every self-hosted runner).
+// by this pool — i.e. job.runs_on ⊆ configured plus any allowed dynamic
+// label prefixes (with the implicit "self-hosted" label always considered
+// satisfied because GitHub assigns it to every self-hosted runner).
 //
-// `configured` is the precomputed (lower-cased + trimmed) set built
-// once at config load — webhook is a hot path and we can't afford to
-// reallocate + restring per request. In normal startup
-// `config.parseLabels` defaults RunnerLabels to ["self-hosted"], so
-// `configured` is never actually empty in production. The empty-set
-// = "serve everything" fallback below is for direct callers / tests.
+// `configured` and `dynamicPrefixes` are precomputed (lower-cased + trimmed)
+// at config load — webhook is a hot path and we can't afford to reallocate +
+// restring per request. In normal startup `config.parseLabels` defaults
+// RunnerLabels to ["self-hosted"], so `configured` is never actually empty in
+// production. The empty-set = "serve everything" fallback below is for direct
+// callers / tests.
 //
 // GitHub's runs-on semantics are cumulative: a runner is only eligible
 // for a job if it has ALL of the job's labels (per the
@@ -389,7 +389,7 @@ func repoIsPublic(repo scheduler.Repository) bool {
 // requiring [self-hosted, gpu] on a pool that only advertises
 // [self-hosted] would launch a runner GitHub would never bind, leaving
 // a ghost.
-func labelsMatch(runsOn []string, configured map[string]struct{}) bool {
+func labelsMatch(runsOn []string, configured map[string]struct{}, dynamicPrefixes []string) bool {
 	if len(configured) == 0 {
 		return true
 	}
@@ -402,10 +402,21 @@ func labelsMatch(runsOn []string, configured map[string]struct{}) bool {
 			continue
 		}
 		if _, ok := configured[k]; !ok {
-			return false
+			if !hasDynamicLabelPrefix(k, dynamicPrefixes) {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+func hasDynamicLabelPrefix(label string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(label, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeLabel lower-cases and trims a label. GitHub treats labels
