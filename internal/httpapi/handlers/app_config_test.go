@@ -374,6 +374,28 @@ func TestAppConfig_Patch_StoreErrorReturns500(t *testing.T) {
 	}
 }
 
+// http.MaxBytesReader returns a typed error that the JSON decoder
+// wraps; the handler reports it as a 400 with the decoded error
+// string. Either way the body is rejected — important that this
+// doesn't slip through and become a request-body OOM vector.
+func TestAppConfig_Patch_OversizeBodyRejected(t *testing.T) {
+	pemStr := generatePEM(t)
+	st := seededStore(t, pemStr)
+	h := newRotateHandler(&config.Config{AllowAdminEdit: true}, st)
+
+	// 65 KiB of garbage — well over the 64 KiB cap.
+	big := strings.Repeat("x", 65*1024)
+	body := `{"webhook_secret":"` + big + `"}`
+
+	rr := doPatch(t, h, body, nil)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("oversize body was accepted (status=200, len=%d)", len(body))
+	}
+	if st.saveN != 0 {
+		t.Fatalf("SaveAppConfig was called on oversize body")
+	}
+}
+
 func TestFingerprint_DistinctForDifferentInputs(t *testing.T) {
 	a := fingerprint([]byte("alpha"))
 	b := fingerprint([]byte("bravo"))

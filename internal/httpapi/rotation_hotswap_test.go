@@ -96,6 +96,23 @@ func TestRotation_WebhookSecretHotSwap(t *testing.T) {
 	if code := postWebhook(t, h, body, secretA); code != http.StatusUnauthorized {
 		t.Fatalf("replay with old secret A: status=%d want 401", code)
 	}
+
+	// Step 5: a malformed signature header (missing the "sha256="
+	// prefix that the webhook handler expects) is also rejected.
+	// This guards the negative side of the post-rotation signature
+	// path: bad headers stay 401 regardless of which secret is live.
+	mac := hmac.New(sha256.New, []byte(secretB))
+	mac.Write(body)
+	rawDigest := hex.EncodeToString(mac.Sum(nil)) // intentionally missing "sha256=" prefix
+	badReq := httptest.NewRequest(http.MethodPost, "/github/webhook", bytes.NewReader(body))
+	badReq.Header.Set("Content-Type", "application/json")
+	badReq.Header.Set("X-GitHub-Event", "ping")
+	badReq.Header.Set("X-Hub-Signature-256", rawDigest)
+	badRR := httptest.NewRecorder()
+	h.ServeHTTP(badRR, badReq)
+	if badRR.Code != http.StatusUnauthorized {
+		t.Fatalf("malformed signature post-rotation: status=%d want 401", badRR.Code)
+	}
 }
 
 // TestRotation_PatchDeniedWhenFlagOff confirms the kill-switch wins
