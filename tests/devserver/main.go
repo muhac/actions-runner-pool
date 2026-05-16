@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/muhac/actions-runner-pool/internal/config"
 	"github.com/muhac/actions-runner-pool/internal/httpapi/handlers"
 )
 
@@ -22,7 +23,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	dashboard := &handlers.DashboardHandler{}
+	// Force the admin-write kill-switch on in the devserver so the
+	// Playwright tests can click retry/cancel buttons — production
+	// gharp gates them server-side rendering disabled buttons when
+	// ALLOW_ADMIN_EDIT is unset (the default). The API calls those
+	// buttons fire are still mocked via page.route() in the test
+	// suite, so this doesn't widen the test's auth surface.
+	dashboard := &handlers.DashboardHandler{Cfg: &config.Config{AllowAdminEdit: true}}
 	mux.HandleFunc("GET /{$}", dashboard.Get)
 	mux.Handle("GET /css/", handlers.CSSHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
