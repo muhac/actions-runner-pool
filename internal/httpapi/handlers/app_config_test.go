@@ -306,6 +306,38 @@ func TestAppConfig_Patch_RotatesMultipleFields(t *testing.T) {
 	}
 }
 
+// Same key with different line endings is not a rotation. Common
+// when an operator copy-pastes a PEM from a Windows terminal or a
+// browser textarea — the line endings become CRLF while the stored
+// version is LF. Byte-exact comparison would mis-trigger a rotation
+// + fingerprint change with no cryptographic difference. The fix is
+// to compare parsed DER, which is line-ending-agnostic.
+func TestAppConfig_Patch_NoOpForSamePEMWithDifferentLineEndings(t *testing.T) {
+	pemStr := generatePEM(t) // LF endings from pem.EncodeToMemory
+	st := seededStore(t, pemStr)
+	h := newRotateHandler(&config.Config{AllowAdminEdit: true}, st)
+
+	// Reconstitute the same key with CRLF line endings.
+	pemCRLF := strings.ReplaceAll(pemStr, "\n", "\r\n")
+	if pemCRLF == pemStr {
+		t.Fatalf("test setup error: CRLF substitution did nothing")
+	}
+
+	body, _ := json.Marshal(map[string]string{"pem": pemCRLF})
+	rr := doPatch(t, h, string(body), nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if st.saveN != 0 {
+		t.Fatalf("SaveAppConfig was called for CRLF-equivalent PEM (calls=%d)", st.saveN)
+	}
+	var resp patchResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if len(resp.Rotated) != 0 {
+		t.Fatalf("Rotated=%v want empty for line-ending-only change", resp.Rotated)
+	}
+}
+
 // No-op: posting the same secret that's already stored is a 200 with
 // no SaveAppConfig call and an empty Rotated list. Useful for idempotent
 // retry scripts.

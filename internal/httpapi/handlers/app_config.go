@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -130,13 +132,25 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "pem must not be empty", http.StatusBadRequest)
 			return
 		}
-		if _, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(*req.PEM)); err != nil {
+		newKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(*req.PEM))
+		if err != nil {
 			http.Error(w, "pem parse failed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		newPEM := []byte(*req.PEM)
-		if string(newPEM) != string(existing.PEM) {
-			merged.PEM = newPEM
+		// Compare parsed DER, not raw PEM bytes. Pasting the same key
+		// with CRLF line endings (browser textarea on Windows, copy from
+		// a Windows terminal) would otherwise look like a rotation even
+		// though the underlying private key is identical — triggering a
+		// pointless DB write, an audit-log entry, and a fingerprint
+		// change that misleads the operator into thinking they
+		// successfully rotated something cryptographic.
+		newDER := x509.MarshalPKCS1PrivateKey(newKey)
+		var existingDER []byte
+		if oldKey, parseErr := jwt.ParseRSAPrivateKeyFromPEM(existing.PEM); parseErr == nil {
+			existingDER = x509.MarshalPKCS1PrivateKey(oldKey)
+		}
+		if !bytes.Equal(newDER, existingDER) {
+			merged.PEM = []byte(*req.PEM)
 			rotated = append(rotated, "pem")
 		}
 	}
