@@ -31,7 +31,7 @@ func TestGetOrCreateInstanceID_GeneratesAndPersists(t *testing.T) {
 		t.Fatalf("id %q shorter than expected", first)
 	}
 	for _, c := range first {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Fatalf("id %q contains non-hex char %q", first, c)
 		}
 	}
