@@ -173,8 +173,12 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		h.logInfo("admin/app-config rotated", "fields", rotated)
 	}
+	// Log every authenticated PATCH attempt, including no-ops where
+	// rotated is empty. Without this, an attacker probing with the
+	// current value of a secret would leave no audit trace because
+	// the no-op fast-path skipped the log line.
+	h.logInfo("admin/app-config patch", "fields", rotated)
 
 	writeJSON(w, patchResponse{
 		Rotated:                  rotated,
