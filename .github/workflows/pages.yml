@@ -44,7 +44,7 @@ jobs:
       # produced a usable site/. The artifact is consumed by the
       # deploy job on main pushes; on PRs it's just a build receipt.
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
