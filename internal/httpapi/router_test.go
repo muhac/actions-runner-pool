@@ -16,7 +16,10 @@ func TestRouter_JobsRoute(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	h := NewRouter(&config.Config{}, st, nil, nil, nil)
+	// AllowAdminEdit:true so retry/cancel proceed past the kill-switch
+	// to the actual route handler — this test is asserting route wiring,
+	// not auth (auth has its own coverage in handlers/jobs_test.go).
+	h := NewRouter(&config.Config{AllowAdminEdit: true}, st, nil, nil, nil)
 
 	t.Run("dashboard", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

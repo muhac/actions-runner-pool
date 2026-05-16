@@ -241,7 +241,7 @@ func TestJobs_Retry(t *testing.T) {
 	j := &store.Job{ID: 9, Status: "completed", Conclusion: "failure"}
 	enq := &enqueueSpy{}
 	st := &jobsStore{jobsByID: map[int64]*store.Job{9: j}}
-	h := &JobsHandler{Cfg: &config.Config{}, Store: st, Scheduler: enq}
+	h := &JobsHandler{Cfg: &config.Config{AllowAdminEdit: true}, Store: st, Scheduler: enq}
 
 	req := httptest.NewRequest(http.MethodPost, "/jobs/9/retry", nil)
 	req.SetPathValue("job_id", "9")
@@ -265,7 +265,7 @@ func TestJobs_Retry(t *testing.T) {
 func TestJobs_Cancel(t *testing.T) {
 	j := &store.Job{ID: 7, Status: "pending"}
 	st := &jobsStore{jobsByID: map[int64]*store.Job{7: j}}
-	h := &JobsHandler{Cfg: &config.Config{}, Store: st}
+	h := &JobsHandler{Cfg: &config.Config{AllowAdminEdit: true}, Store: st}
 
 	req := httptest.NewRequest(http.MethodPost, "/jobs/7/cancel", nil)
 	req.SetPathValue("job_id", "7")
@@ -283,8 +283,64 @@ func TestJobs_Cancel(t *testing.T) {
 	}
 }
 
+func TestJobs_Retry_RequiresAllowAdminEdit(t *testing.T) {
+	j := &store.Job{ID: 9, Status: "completed"}
+	st := &jobsStore{jobsByID: map[int64]*store.Job{9: j}}
+	// AllowAdminEdit defaults to false → write endpoints refuse even
+	// without a token configured.
+	h := &JobsHandler{Cfg: &config.Config{}, Store: st}
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/9/retry", nil)
+	req.SetPathValue("job_id", "9")
+	rr := httptest.NewRecorder()
+	h.Retry(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+	if st.retryCalls != 0 {
+		t.Fatalf("RetryJobIfCompleted should not have been called, got %d", st.retryCalls)
+	}
+}
+
+func TestJobs_Cancel_RequiresAllowAdminEdit(t *testing.T) {
+	j := &store.Job{ID: 7, Status: "pending"}
+	st := &jobsStore{jobsByID: map[int64]*store.Job{7: j}}
+	h := &JobsHandler{Cfg: &config.Config{}, Store: st}
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/7/cancel", nil)
+	req.SetPathValue("job_id", "7")
+	rr := httptest.NewRecorder()
+	h.Cancel(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+	if st.cancelCalls != 0 {
+		t.Fatalf("CancelJobIfPending should not have been called, got %d", st.cancelCalls)
+	}
+}
+
+// Bearer auth still applies when AllowAdminEdit is on; bad token → 401
+// (distinct from the 403 disabled signal).
+func TestJobs_Retry_BadTokenReturns401WhenFlagOn(t *testing.T) {
+	j := &store.Job{ID: 9, Status: "completed"}
+	st := &jobsStore{jobsByID: map[int64]*store.Job{9: j}}
+	h := &JobsHandler{Cfg: &config.Config{AllowAdminEdit: true, AdminToken: "secret"}, Store: st}
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/9/retry", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	req.SetPathValue("job_id", "9")
+	rr := httptest.NewRecorder()
+	h.Retry(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
 func TestJobs_ActionConflictAndValidation(t *testing.T) {
-	h := &JobsHandler{Cfg: &config.Config{}, Store: &jobsStore{jobsByID: map[int64]*store.Job{1: &store.Job{ID: 1, Status: "in_progress"}}}}
+	h := &JobsHandler{Cfg: &config.Config{AllowAdminEdit: true}, Store: &jobsStore{jobsByID: map[int64]*store.Job{1: &store.Job{ID: 1, Status: "in_progress"}}}}
 
 	t.Run("retry conflict", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/jobs/1/retry", nil)

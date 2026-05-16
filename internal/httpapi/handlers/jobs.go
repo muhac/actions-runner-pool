@@ -110,9 +110,8 @@ func (h *JobsHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 // POST /jobs/{job_id}/retry
 func (h *JobsHandler) Retry(w http.ResponseWriter, r *http.Request) {
-	if !authorizedBearer(h.Cfg, r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if status := adminWriteDenied(h.Cfg, r.Header.Get("Authorization")); status != 0 {
+		writeAdminAuthError(w, status)
 		return
 	}
 
@@ -158,9 +157,8 @@ func (h *JobsHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 // POST /jobs/{job_id}/cancel
 func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
-	if !authorizedBearer(h.Cfg, r.Header.Get("Authorization")) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if status := adminWriteDenied(h.Cfg, r.Header.Get("Authorization")); status != 0 {
+		writeAdminAuthError(w, status)
 		return
 	}
 
@@ -228,6 +226,43 @@ func authorizedBearer(cfg *config.Config, authHeader string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.AdminToken)) == 1
+}
+
+// adminWriteDenied reports the HTTP status a mutating admin endpoint
+// should return when the caller is not allowed to write, or 0 if the
+// caller is allowed. Split into a single helper so the read-only flag
+// (`ALLOW_ADMIN_EDIT`) and the bearer-token check share one auth
+// surface: 401 means "wrong/missing credentials", 403 means
+// "credentials fine but writes are disabled at this deployment".
+//
+// Ordering matters: check the flag first. We want an unauthenticated
+// caller hitting a write endpoint while writes are disabled to learn
+// the endpoint is disabled (403), rather than leaking that writes are
+// possible-but-locked-behind-this-token (401). Either way the action
+// fails, and 403 carries the operational hint that fixes the issue.
+func adminWriteDenied(cfg *config.Config, authHeader string) int {
+	if cfg == nil || !cfg.AllowAdminEdit {
+		return http.StatusForbidden
+	}
+	if !authorizedBearer(cfg, authHeader) {
+		return http.StatusUnauthorized
+	}
+	return 0
+}
+
+// writeAdminAuthError writes the canonical body and headers for the
+// status code returned by adminWriteDenied. Centralised so the
+// WWW-Authenticate hint stays in sync with the status code.
+func writeAdminAuthError(w http.ResponseWriter, status int) {
+	switch status {
+	case http.StatusUnauthorized:
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	case http.StatusForbidden:
+		http.Error(w, "admin writes are disabled; set ALLOW_ADMIN_EDIT=true to enable", http.StatusForbidden)
+	default:
+		http.Error(w, "forbidden", status)
+	}
 }
 
 func parseStatuses(raw []string) ([]string, error) {
