@@ -27,8 +27,21 @@ type Config struct {
 	// integration tests setting a unique per-run prefix so the
 	// reconciler doesn't reach into other deployments' containers).
 	RunnerNamePrefix string
-	RunnerCommand    []string
-	RunnerLabels     []string
+	// InstanceID is a stable per-deployment identifier (persisted in the
+	// store, or overridden via GHARP_INSTANCE_ID). It scopes container
+	// names so two gharp instances sharing a docker daemon don't reach
+	// into each other's containers during orphan/ghost sweeps. main()
+	// is responsible for populating this — Load() only reads the env
+	// override.
+	InstanceID string
+	// ContainerNamePrefix is the *effective* prefix used by the
+	// scheduler when minting container names AND by the reconciler when
+	// scoping its sweeps. It is RunnerNamePrefix+InstanceID+"-" once
+	// main() has resolved the instance id. Left empty by Load() — wired
+	// in main() after the store is open.
+	ContainerNamePrefix string
+	RunnerCommand       []string
+	RunnerLabels        []string
 	// RunnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
@@ -99,6 +112,7 @@ func Load() (*Config, error) {
 		AdminToken:           strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		RunnerNamePrefix:     envOr("RUNNER_NAME_PREFIX", "gharp-"),
+		InstanceID:           strings.TrimSpace(os.Getenv("GHARP_INSTANCE_ID")),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
 		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),

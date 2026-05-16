@@ -3,8 +3,10 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -72,6 +74,46 @@ func (s *SQLite) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// ---------------- instance ----------------
+
+// GetOrCreateInstanceID returns the stable per-deployment identifier
+// persisted in the `instance` table, creating it on first call.
+//
+// The ID scopes container-name namespaces so two gharp deployments
+// sharing a docker daemon don't mistake each other's containers for
+// orphans. Each deployment has its own SQLite file, so each gets its
+// own ID — no operator action required.
+//
+// Format: 6 lowercase hex chars (24 bits of entropy). At the realistic
+// scale of "a few gharp instances on one host" the birthday-collision
+// risk is negligible; an operator who hits a collision can override via
+// GHARP_INSTANCE_ID.
+func (s *SQLite) GetOrCreateInstanceID(ctx context.Context) (string, error) {
+	var uid string
+	err := s.db.QueryRowContext(ctx, `SELECT uid FROM instance WHERE id = 1`).Scan(&uid)
+	if err == nil {
+		return uid, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("read instance: %w", err)
+	}
+	var b [3]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate instance id: %w", err)
+	}
+	uid = hex.EncodeToString(b[:])
+	// INSERT OR IGNORE handles the (extremely unlikely) race where two
+	// goroutines call this concurrently on a fresh DB.
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO instance (id, uid) VALUES (1, ?)`, uid); err != nil {
+		return "", fmt.Errorf("insert instance: %w", err)
+	}
+	// Re-read in case the IGNORE branch hit — the winning value is canonical.
+	if err := s.db.QueryRowContext(ctx, `SELECT uid FROM instance WHERE id = 1`).Scan(&uid); err != nil {
+		return "", fmt.Errorf("reread instance: %w", err)
+	}
+	return uid, nil
 }
 
 // ---------------- app_config ----------------

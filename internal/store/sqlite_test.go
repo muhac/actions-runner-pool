@@ -16,6 +16,61 @@ func newStore(t *testing.T) *SQLite {
 	return s
 }
 
+func TestGetOrCreateInstanceID_GeneratesAndPersists(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	first, err := s.GetOrCreateInstanceID(ctx)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if first == "" {
+		t.Fatal("first returned empty id")
+	}
+	if len(first) < 4 {
+		t.Fatalf("id %q shorter than expected", first)
+	}
+	for _, c := range first {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Fatalf("id %q contains non-hex char %q", first, c)
+		}
+	}
+
+	second, err := s.GetOrCreateInstanceID(ctx)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if second != first {
+		t.Fatalf("id not stable: first=%q second=%q", first, second)
+	}
+}
+
+func TestGetOrCreateInstanceID_DistinctPerDB(t *testing.T) {
+	ctx := context.Background()
+	a, err := OpenSQLite("file:" + t.TempDir() + "/a.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	b, err := OpenSQLite("file:" + t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+
+	idA, err := a.GetOrCreateInstanceID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := b.GetOrCreateInstanceID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idA == idB {
+		t.Fatalf("two fresh DBs produced the same instance id %q — multi-instance isolation broken", idA)
+	}
+}
+
 func TestSaveAndGetAppConfig(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

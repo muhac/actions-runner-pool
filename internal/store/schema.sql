@@ -1,3 +1,9 @@
+CREATE TABLE IF NOT EXISTS instance (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  uid        TEXT    NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS app_config (
   id              INTEGER PRIMARY KEY CHECK (id = 1),
   app_id          INTEGER NOT NULL,

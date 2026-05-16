@@ -320,6 +320,30 @@ func TestReconcile_OrphanContainer_ForceRemoved(t *testing.T) {
 	}
 }
 
+// (3a-bis) Multi-instance isolation: instance A's reconciler must
+// not touch containers belonging to instance B, even when both
+// deployments share the same operator-set RUNNER_NAME_PREFIX. The
+// instance id embedded in the effective prefix is what keeps them
+// from clobbering each other on a shared docker daemon.
+func TestReconcile_OrphanSweep_IgnoresOtherInstancePrefix(t *testing.T) {
+	st := &fakeStore{}
+	dk := &fakeDocker{
+		exists: map[string]bool{},
+		prefixList: []ContainerInfo{
+			{Name: "gharp-instA-99-zzzz", CreatedAt: time.Unix(1_700_000_000-600, 0)},
+			{Name: "gharp-instB-99-yyyy", CreatedAt: time.Unix(1_700_000_000-600, 0)},
+		},
+	}
+	r := New(st, dk, nil, quietLog(), 1*time.Hour, "gharp-instA-", "", nil, 0)
+	r.period = 10 * time.Millisecond
+	r.grace = 5 * time.Minute
+	r.nowFn = func() time.Time { return time.Unix(1_700_000_000, 0) }
+	r.Reconcile(context.Background())
+	if len(dk.removed) != 1 || dk.removed[0] != "gharp-instA-99-zzzz" {
+		t.Fatalf("instance A swept the wrong containers: %+v", dk.removed)
+	}
+}
+
 // (3b) Per-container grace: a young orphan is deferred regardless of
 // what other rows look like.
 func TestReconcile_OrphanGrace_DefersYoungContainer(t *testing.T) {
