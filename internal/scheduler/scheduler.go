@@ -82,7 +82,7 @@ func New(cfg *config.Config, st store.Store, gh GitHubClient, rn Launcher, log *
 		// few seconds. 1 minute gives plenty of room for the install
 		// event to arrive while still bounding the replay loop.
 		noInstallationCancelAge: 1 * time.Minute,
-		nameFn:                  newNameFn(cfg.RunnerNamePrefix),
+		nameFn:                  newNameFn(effectiveContainerPrefix(cfg)),
 		nowFn:                   time.Now,
 		pendingTimers:           map[*time.Timer]struct{}{},
 	}
@@ -423,6 +423,18 @@ func (s *Scheduler) launchWithRetry(ctx context.Context, jobID int64, containerN
 		}
 	}
 	return fmt.Errorf("launch failed after %d attempt(s): %w", maxAttempts, lastErr)
+}
+
+// effectiveContainerPrefix returns the prefix actually used to mint
+// container names. It prefers cfg.ContainerNamePrefix (wired by main()
+// after the per-instance id is loaded from the store) and falls back
+// to the raw RunnerNamePrefix so tests and code paths that construct
+// a Scheduler without going through main() still work.
+func effectiveContainerPrefix(cfg *config.Config) string {
+	if cfg.ContainerNamePrefix != "" {
+		return cfg.ContainerNamePrefix
+	}
+	return cfg.RunnerNamePrefix
 }
 
 // newNameFn returns a name generator that yields prefix+jobID+hex.

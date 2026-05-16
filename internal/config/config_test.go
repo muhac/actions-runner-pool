@@ -145,6 +145,37 @@ func TestLoad_BaseURLRequired(t *testing.T) {
 	}
 }
 
+func TestLoad_InstanceID_Valid(t *testing.T) {
+	for _, v := range []string{"prod", "ci-1", "abc.def", "x_y_z", "ABC123"} {
+		withEnv(t, map[string]string{
+			"BASE_URL":          "https://example.test",
+			"GHARP_INSTANCE_ID": v,
+		}, func() {
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load(%q): %v", v, err)
+			}
+			if cfg.InstanceID != v {
+				t.Fatalf("InstanceID = %q, want %q", cfg.InstanceID, v)
+			}
+		})
+	}
+}
+
+func TestLoad_InstanceID_Invalid(t *testing.T) {
+	for _, v := range []string{"-bad", "with space", "slash/here", ".dot", "has*star"} {
+		withEnv(t, map[string]string{
+			"BASE_URL":          "https://example.test",
+			"GHARP_INSTANCE_ID": v,
+		}, func() {
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "GHARP_INSTANCE_ID") {
+				t.Fatalf("want GHARP_INSTANCE_ID validation error for %q, got: %v", v, err)
+			}
+		})
+	}
+}
+
 func TestLoad_RunnerCommandInvalidJSON(t *testing.T) {
 	withEnv(t, map[string]string{
 		"BASE_URL":       "https://example.test",

@@ -269,7 +269,7 @@ every 60s:
             keep
 
     # orphan container sweep
-    for (name, createdAt) in `docker ps -a --filter name=<RUNNER_NAME_PREFIX> --format {{.Names}}|{{.CreatedAt}}`:
+    for (name, createdAt) in `docker ps -a --filter name=<RUNNER_NAME_PREFIX><INSTANCE_ID>- --format {{.Names}}|{{.CreatedAt}}`:
         if name not in active runners table:
             if createdAt is recent (< 30s grace):
                 defer                               # per-container, protects very new containers from short-lived docker-vs-DB visibility skew across sqlite connections

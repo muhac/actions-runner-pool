@@ -49,6 +49,23 @@ func run() error {
 		}
 	}()
 
+	if cfg.InstanceID == "" {
+		id, err := st.GetOrCreateInstanceID(context.Background())
+		if err != nil {
+			return err
+		}
+		cfg.InstanceID = id
+	}
+	// Effective prefix scopes both scheduler-minted container names and
+	// reconciler sweeps. Two gharps sharing a docker daemon each pick a
+	// distinct instance id from their own store, so neither's sweep
+	// matches the other's containers — even when both use the default
+	// RUNNER_NAME_PREFIX.
+	cfg.ContainerNamePrefix = cfg.RunnerNamePrefix + cfg.InstanceID + "-"
+	log.Info("instance id resolved",
+		"instance_id", cfg.InstanceID,
+		"container_name_prefix", cfg.ContainerNamePrefix)
+
 	if existing, err := st.GetAppConfig(context.Background()); err != nil {
 		log.Warn("could not load app_config for BASE_URL drift check", "err", err)
 	} else if warn, msg := checkBaseURLDrift(existing, cfg.BaseURL); warn {
@@ -86,7 +103,7 @@ func run() error {
 		}
 	}()
 
-	rec := reconciler.New(st, reconciler.NewExecDocker(), gh, log, cfg.RunnerMaxLifetime, cfg.RunnerNamePrefix, cfg.RunnerWorkdirRoot, cfg.MaintenanceCommand, cfg.MaintenanceInterval)
+	rec := reconciler.New(st, reconciler.NewExecDocker(), gh, log, cfg.RunnerMaxLifetime, cfg.ContainerNamePrefix, cfg.RunnerNamePrefix, cfg.RunnerWorkdirRoot, cfg.MaintenanceCommand, cfg.MaintenanceInterval)
 	go func() {
 		if err := rec.Run(signalCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("reconciler stopped", "err", err)

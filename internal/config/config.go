@@ -8,10 +8,18 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// instanceIDPattern matches docker's accepted container name charset
+// (first char is alnum, rest may include _.- as well). Anchored full
+// match. We splice GHARP_INSTANCE_ID into container names verbatim, so
+// rejecting anything outside this charset at Load() turns an opaque
+// runtime failure into a clear startup error.
+var instanceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
@@ -20,15 +28,30 @@ type Config struct {
 	StoreDSN    string
 	AdminToken  string
 	RunnerImage string
-	// RunnerNamePrefix scopes both the container/runner names the
-	// scheduler generates AND the orphan sweep the reconciler
-	// performs. Default "gharp-". Override to isolate a deployment
-	// from sibling deployments sharing the same docker daemon (e.g.
-	// integration tests setting a unique per-run prefix so the
-	// reconciler doesn't reach into other deployments' containers).
+	// RunnerNamePrefix is the operator-facing leading segment of
+	// runner/container names. Default "gharp-". Sibling-deployment
+	// isolation on a shared docker daemon is handled automatically by
+	// the per-instance id appended to this (see InstanceID and
+	// ContainerNamePrefix), so overriding is only useful for
+	// readability — e.g. naming a deployment "prod-" or "ci-" so
+	// containers are easier to spot in `docker ps`. Empty string fails
+	// startup.
 	RunnerNamePrefix string
-	RunnerCommand    []string
-	RunnerLabels     []string
+	// InstanceID is a stable per-deployment identifier (persisted in the
+	// store, or overridden via GHARP_INSTANCE_ID). It scopes container
+	// names so two gharp instances sharing a docker daemon don't reach
+	// into each other's containers during orphan/ghost sweeps. main()
+	// is responsible for populating this — Load() only reads the env
+	// override.
+	InstanceID string
+	// ContainerNamePrefix is the *effective* prefix used by the
+	// scheduler when minting container names AND by the reconciler when
+	// scoping its sweeps. It is RunnerNamePrefix+InstanceID+"-" once
+	// main() has resolved the instance id. Left empty by Load() — wired
+	// in main() after the store is open.
+	ContainerNamePrefix string
+	RunnerCommand       []string
+	RunnerLabels        []string
 	// RunnerLabelSet is the precomputed lower-cased + trimmed set of
 	// RunnerLabels — used by webhook label admission on the hot path.
 	// Built once at Load so we don't reallocate + restring per webhook.
@@ -99,6 +122,7 @@ func Load() (*Config, error) {
 		AdminToken:           strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 		RunnerImage:          envOr("RUNNER_IMAGE", "myoung34/github-runner:latest"),
 		RunnerNamePrefix:     envOr("RUNNER_NAME_PREFIX", "gharp-"),
+		InstanceID:           strings.TrimSpace(os.Getenv("GHARP_INSTANCE_ID")),
 		MaxConcurrentRunners: envInt("MAX_CONCURRENT_RUNNERS", 4),
 		RunnerMaxLifetime:    envDuration("RUNNER_MAX_LIFETIME", 2*time.Hour),
 		ShutdownDrainTimeout: envDuration("SHUTDOWN_DRAIN_TIMEOUT", 30*time.Second),
@@ -141,6 +165,13 @@ func Load() (*Config, error) {
 		// container on the host (substring match returns everything).
 		// Refuse rather than nuke unrelated containers.
 		return nil, errors.New("RUNNER_NAME_PREFIX must be non-empty")
+	}
+
+	if c.InstanceID != "" && !instanceIDPattern.MatchString(c.InstanceID) {
+		// We splice this into container names verbatim. Reject up front
+		// rather than wait for `docker run` to fail on the first dispatch
+		// with an opaque "invalid container name" error.
+		return nil, fmt.Errorf("GHARP_INSTANCE_ID %q must match %s (docker container-name charset)", c.InstanceID, instanceIDPattern)
 	}
 
 	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
