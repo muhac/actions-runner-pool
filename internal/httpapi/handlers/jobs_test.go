@@ -321,6 +321,29 @@ func TestJobs_Cancel_RequiresAllowAdminEdit(t *testing.T) {
 	}
 }
 
+// Bearer-first ordering: when ADMIN_TOKEN is set and the caller has no
+// (or wrong) bearer, the response is 401 *regardless* of the flag's
+// state. This is what makes the dashboard's auth-prompt flow work —
+// the JS `apiFetch` only triggers the token panel on 401. If we
+// returned 403 to an unauthenticated caller, an operator with an
+// admin token configured but not yet entered would never get
+// prompted. Tests the contract directly.
+func TestJobs_Retry_BadTokenReturns401EvenWhenFlagOff(t *testing.T) {
+	j := &store.Job{ID: 9, Status: "completed"}
+	st := &jobsStore{jobsByID: map[int64]*store.Job{9: j}}
+	h := &JobsHandler{Cfg: &config.Config{AdminToken: "secret" /* AllowAdminEdit: false */}, Store: st}
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/9/retry", nil)
+	// No Authorization header.
+	req.SetPathValue("job_id", "9")
+	rr := httptest.NewRecorder()
+	h.Retry(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (bearer-first ordering)", rr.Code)
+	}
+}
+
 // Bearer auth still applies when AllowAdminEdit is on; bad token → 401
 // (distinct from the 403 disabled signal).
 func TestJobs_Retry_BadTokenReturns401WhenFlagOn(t *testing.T) {

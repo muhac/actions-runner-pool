@@ -135,6 +135,21 @@ func TestAppConfig_Patch_UnauthorizedWhenBadToken(t *testing.T) {
 	}
 }
 
+// Bearer-first ordering: bad token + flag off → 401 (not 403). Same
+// contract as the jobs retry/cancel path; the dashboard relies on
+// 401 to trigger its token-entry panel.
+func TestAppConfig_Patch_UnauthorizedBeforeFlag(t *testing.T) {
+	pemStr := generatePEM(t)
+	st := seededStore(t, pemStr)
+	// AdminToken set, flag off, bearer missing.
+	h := newRotateHandler(&config.Config{AdminToken: "secret"}, st)
+
+	rr := doPatch(t, h, `{"webhook_secret":"abcdefghij1234567890"}`, nil /* no Authorization */)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401 (bearer-first)", rr.Code)
+	}
+}
+
 // AdminToken empty → handler open (mirrors authorizedBearer's openness).
 func TestAppConfig_Patch_OpenWhenAdminTokenEmpty(t *testing.T) {
 	pemStr := generatePEM(t)

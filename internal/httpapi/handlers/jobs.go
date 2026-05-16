@@ -235,17 +235,25 @@ func authorizedBearer(cfg *config.Config, authHeader string) bool {
 // surface: 401 means "wrong/missing credentials", 403 means
 // "credentials fine but writes are disabled at this deployment".
 //
-// Ordering matters: check the flag first. We want an unauthenticated
-// caller hitting a write endpoint while writes are disabled to learn
-// the endpoint is disabled (403), rather than leaking that writes are
-// possible-but-locked-behind-this-token (401). Either way the action
-// fails, and 403 carries the operational hint that fixes the issue.
+// Ordering: bearer first, flag second. Matches RFC 7235 / OWASP
+// guidance (authenticate before authorize) and — more practically —
+// keeps the dashboard's auth-prompt flow working: the JS `apiFetch`
+// only triggers the token-entry panel on 401. If we returned 403 to
+// an unauthenticated caller, an operator with ADMIN_TOKEN configured
+// but no token entered would never get prompted; they'd just see a
+// confusing "writes disabled" error.
+//
+// The 401-before-403 ordering does mean an attacker without a token
+// can't distinguish "endpoint exists but writes disabled" from
+// "endpoint exists and writes enabled" — both look like 401. That's
+// the correct property: identity is checked before any
+// authorization detail is leaked.
 func adminWriteDenied(cfg *config.Config, authHeader string) int {
-	if cfg == nil || !cfg.AllowAdminEdit {
-		return http.StatusForbidden
-	}
 	if !authorizedBearer(cfg, authHeader) {
 		return http.StatusUnauthorized
+	}
+	if cfg == nil || !cfg.AllowAdminEdit {
+		return http.StatusForbidden
 	}
 	return 0
 }
