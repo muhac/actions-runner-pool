@@ -83,10 +83,16 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		// http.MaxBytesReader surfaces oversize as a typed error; the
-		// other common case is a JSON syntax error. Both deserve a 400
-		// with the error string — leaking it back is fine because the
-		// caller is admin-authed already.
+		// http.MaxBytesReader surfaces oversize as a typed
+		// *http.MaxBytesError that the JSON decoder wraps. Match it
+		// first so we can return 413 (matches what docs advertise and
+		// what an HTTP client expects for "body too large"), distinct
+		// from the generic 400 for syntax errors / EOF.
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		if errors.Is(err, io.EOF) {
 			http.Error(w, "request body must be JSON object", http.StatusBadRequest)
 			return

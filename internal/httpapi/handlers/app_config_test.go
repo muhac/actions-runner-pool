@@ -450,11 +450,12 @@ func TestAppConfig_Patch_StoreErrorReturns500(t *testing.T) {
 	}
 }
 
-// http.MaxBytesReader returns a typed error that the JSON decoder
-// wraps; the handler reports it as a 400 with the decoded error
-// string. Either way the body is rejected — important that this
-// doesn't slip through and become a request-body OOM vector.
-func TestAppConfig_Patch_OversizeBodyRejected(t *testing.T) {
+// http.MaxBytesReader returns a *http.MaxBytesError wrapped by the
+// JSON decoder. The handler matches that with errors.As and returns
+// 413 (matches what the rotation doc advertises). Without the
+// dedicated branch the caller would see a generic 400 and couldn't
+// distinguish "body too large" from "body malformed".
+func TestAppConfig_Patch_OversizeBodyReturns413(t *testing.T) {
 	pemStr := generatePEM(t)
 	st := seededStore(t, pemStr)
 	h := newRotateHandler(&config.Config{AllowAdminEdit: true}, st)
@@ -464,8 +465,8 @@ func TestAppConfig_Patch_OversizeBodyRejected(t *testing.T) {
 	body := `{"webhook_secret":"` + big + `"}`
 
 	rr := doPatch(t, h, body, nil)
-	if rr.Code == http.StatusOK {
-		t.Fatalf("oversize body was accepted (status=200, len=%d)", len(body))
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize body: status=%d want 413, body=%s", rr.Code, rr.Body.String())
 	}
 	if st.totalWrites() != 0 {
 		t.Fatalf("store write applied on oversize body (totalWrites=%d)", st.totalWrites())
