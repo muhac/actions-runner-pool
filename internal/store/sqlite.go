@@ -116,6 +116,11 @@ func (s *SQLite) GetOrCreateInstanceID(ctx context.Context) (string, error) {
 	return uid, nil
 }
 
+// ErrNoAppConfig is returned by the per-field UpdateAppConfig* setters
+// when the single-row `app_config` table has not been initialised by
+// the manifest flow yet. The handlers map this to HTTP 409.
+var ErrNoAppConfig = errors.New("app_config row does not exist; run /setup first")
+
 // ---------------- app_config ----------------
 
 func (s *SQLite) SaveAppConfig(ctx context.Context, cfg *AppConfig) error {
@@ -130,6 +135,48 @@ ON CONFLICT(id) DO UPDATE SET
 		cfg.AppID, cfg.Slug, cfg.WebhookSecret, cfg.PEM,
 		cfg.ClientID, cfg.ClientSecret, cfg.BaseURL)
 	return err
+}
+
+// UpdateAppConfigWebhookSecret writes only the webhook_secret column.
+// Wraps the SQL UPDATE in sqlite's per-statement write lock so two
+// concurrent rotations of *different* columns can't lose updates the
+// way a SaveAppConfig-style whole-row write would.
+func (s *SQLite) UpdateAppConfigWebhookSecret(ctx context.Context, secret string) error {
+	return s.updateAppConfigField(ctx, "webhook_secret", secret)
+}
+
+// UpdateAppConfigPEM writes only the pem column. See
+// UpdateAppConfigWebhookSecret for the concurrency rationale.
+func (s *SQLite) UpdateAppConfigPEM(ctx context.Context, pem []byte) error {
+	return s.updateAppConfigField(ctx, "pem", pem)
+}
+
+// UpdateAppConfigClientSecret writes only the client_secret column.
+// See UpdateAppConfigWebhookSecret for the concurrency rationale.
+func (s *SQLite) UpdateAppConfigClientSecret(ctx context.Context, secret string) error {
+	return s.updateAppConfigField(ctx, "client_secret", secret)
+}
+
+// updateAppConfigField builds the parameterised UPDATE. `col` is a
+// trusted string-constant from the three setters above (never user
+// input), so format-string interpolation is safe; the value goes
+// through a placeholder. Returns ErrNoAppConfig when the single
+// id=1 row does not exist so callers can surface a 409 to operators
+// who haven't run /setup yet.
+func (s *SQLite) updateAppConfigField(ctx context.Context, col string, value any) error {
+	q := "UPDATE app_config SET " + col + " = ? WHERE id = 1"
+	res, err := s.db.ExecContext(ctx, q, value)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoAppConfig
+	}
+	return nil
 }
 
 func (s *SQLite) GetAppConfig(ctx context.Context) (*AppConfig, error) {

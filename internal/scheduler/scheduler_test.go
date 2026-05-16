@@ -1283,6 +1283,9 @@ func (e *errStore) PendingJobs(ctx context.Context) ([]*store.Job, error) {
 // they panic if exercised so an accidental call surfaces loudly.
 func (e *errStore) SaveAppConfig(context.Context, *store.AppConfig) error            { panic("unused") }
 func (e *errStore) GetAppConfig(context.Context) (*store.AppConfig, error)           { panic("unused") }
+func (e *errStore) UpdateAppConfigWebhookSecret(context.Context, string) error       { panic("unused") }
+func (e *errStore) UpdateAppConfigPEM(context.Context, []byte) error                 { panic("unused") }
+func (e *errStore) UpdateAppConfigClientSecret(context.Context, string) error        { panic("unused") }
 func (e *errStore) UpsertInstallation(context.Context, *store.Installation) error    { panic("unused") }
 func (e *errStore) ListInstallations(context.Context) ([]*store.Installation, error) { panic("unused") }
 func (e *errStore) UpsertRepoInstallation(context.Context, string, int64) error      { panic("unused") }

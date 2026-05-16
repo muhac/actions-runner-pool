@@ -110,8 +110,23 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	merged := *existing
+	// Per-field UPDATE rather than read-modify-write SaveAppConfig:
+	// two concurrent rotations of *different* fields could otherwise
+	// each start from a stale snapshot and the later-committing
+	// request would silently undo the earlier one. Each field below
+	// dispatches a single-column UPDATE; sqlite serialises writes
+	// per-statement so the two rotations interleave cleanly.
+	//
+	// The existing snapshot is still consulted for the no-op
+	// fast-path (skip the write when the caller's value matches what
+	// we just read). That decision is racy under concurrent writes
+	// to the *same* field — the loser may observe "no change" when
+	// in fact their value differs — but the only consequence is a
+	// redundant 200 with rotated=[] rather than a clobber.
 	rotated := make([]string, 0, 3)
+	finalWebhookSecret := []byte(existing.WebhookSecret)
+	finalPEM := existing.PEM
+	finalClientSecret := []byte(existing.ClientSecret)
 
 	if req.WebhookSecret != nil {
 		v := strings.TrimSpace(*req.WebhookSecret)
@@ -120,8 +135,12 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if v != existing.WebhookSecret {
-			merged.WebhookSecret = v
+			if err := h.Store.UpdateAppConfigWebhookSecret(r.Context(), v); err != nil {
+				h.handleUpdateErr(w, "update webhook_secret", err)
+				return
+			}
 			rotated = append(rotated, "webhook_secret")
+			finalWebhookSecret = []byte(v)
 		}
 	}
 
@@ -150,8 +169,13 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			existingDER = x509.MarshalPKCS1PrivateKey(oldKey)
 		}
 		if !bytes.Equal(newDER, existingDER) {
-			merged.PEM = []byte(*req.PEM)
+			newPEM := []byte(*req.PEM)
+			if err := h.Store.UpdateAppConfigPEM(r.Context(), newPEM); err != nil {
+				h.handleUpdateErr(w, "update pem", err)
+				return
+			}
 			rotated = append(rotated, "pem")
+			finalPEM = newPEM
 		}
 	}
 
@@ -162,18 +186,15 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if v != existing.ClientSecret {
-			merged.ClientSecret = v
+			if err := h.Store.UpdateAppConfigClientSecret(r.Context(), v); err != nil {
+				h.handleUpdateErr(w, "update client_secret", err)
+				return
+			}
 			rotated = append(rotated, "client_secret")
+			finalClientSecret = []byte(v)
 		}
 	}
 
-	if len(rotated) > 0 {
-		if err := h.Store.SaveAppConfig(r.Context(), &merged); err != nil {
-			h.logError("save app config", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-	}
 	// Log every authenticated PATCH attempt, including no-ops where
 	// rotated is empty. Without this, an attacker probing with the
 	// current value of a secret would leave no audit trace because
@@ -182,10 +203,24 @@ func (h *AppConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, patchResponse{
 		Rotated:                  rotated,
-		WebhookSecretFingerprint: fingerprint([]byte(merged.WebhookSecret)),
-		PEMFingerprint:           fingerprint(merged.PEM),
-		ClientSecretFingerprint:  fingerprint([]byte(merged.ClientSecret)),
+		WebhookSecretFingerprint: fingerprint(finalWebhookSecret),
+		PEMFingerprint:           fingerprint(finalPEM),
+		ClientSecretFingerprint:  fingerprint(finalClientSecret),
 	})
+}
+
+// handleUpdateErr maps a per-field UPDATE failure to an HTTP response.
+// ErrNoAppConfig is only reachable if the app_config row was deleted
+// between our GetAppConfig snapshot and the per-field UPDATE — vanishingly
+// rare, but surface it as 409 to match the snapshot-was-nil path so the
+// operator response is consistent.
+func (h *AppConfigHandler) handleUpdateErr(w http.ResponseWriter, op string, err error) {
+	if errors.Is(err, store.ErrNoAppConfig) {
+		http.Error(w, "app_config is not set; run /setup first", http.StatusConflict)
+		return
+	}
+	h.logError(op, err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
 // fingerprint returns the first 12 hex chars of sha256(v) — 48 bits, plenty

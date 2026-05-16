@@ -28,9 +28,16 @@ type appCfgStore struct {
 	current  *store.AppConfig
 	getErr   error
 	saveErr  error
+	updateErr error
 	getCalls int
 	saved    *store.AppConfig
 	saveN    int
+	// Per-field update counters. The handler now uses these instead of
+	// SaveAppConfig; saveN stays in the struct only to keep older tests
+	// that assert "no whole-row write happened" working.
+	updateWebhookN int
+	updatePEMN     int
+	updateClientN  int
 }
 
 func (s *appCfgStore) GetAppConfig(_ context.Context) (*store.AppConfig, error) {
@@ -58,6 +65,73 @@ func (s *appCfgStore) SaveAppConfig(_ context.Context, c *store.AppConfig) error
 	s.current = &cp
 	s.saveN++
 	return nil
+}
+
+func (s *appCfgStore) UpdateAppConfigWebhookSecret(_ context.Context, v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if s.current == nil {
+		return store.ErrNoAppConfig
+	}
+	s.current.WebhookSecret = v
+	s.updateWebhookN++
+	return nil
+}
+
+func (s *appCfgStore) UpdateAppConfigPEM(_ context.Context, v []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if s.current == nil {
+		return store.ErrNoAppConfig
+	}
+	s.current.PEM = append([]byte(nil), v...)
+	s.updatePEMN++
+	return nil
+}
+
+func (s *appCfgStore) UpdateAppConfigClientSecret(_ context.Context, v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if s.current == nil {
+		return store.ErrNoAppConfig
+	}
+	s.current.ClientSecret = v
+	s.updateClientN++
+	return nil
+}
+
+// totalWrites is the count of mutations applied via any write path
+// (whole-row SaveAppConfig or any of the three per-field setters).
+// Tests assert against this rather than saveN now that the handler
+// uses narrow setters; saveN is preserved separately so a test that
+// wants to assert "the legacy whole-row write was NOT used" can
+// still do so.
+func (s *appCfgStore) totalWrites() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveN + s.updateWebhookN + s.updatePEMN + s.updateClientN
+}
+
+// snapshot returns a copy of the current stored row. Tests use this
+// instead of the old `saved` field because the per-field path never
+// touches `saved`.
+func (s *appCfgStore) snapshot() *store.AppConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil {
+		return nil
+	}
+	cp := *s.current
+	return &cp
 }
 
 // generatePEM is a helper that mints a fresh RSA-2048 keypair as a PEM
@@ -116,8 +190,8 @@ func TestAppConfig_Patch_ForbiddenWhenFlagOff(t *testing.T) {
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status=%d want 403", rr.Code)
 	}
-	if st.saveN != 0 {
-		t.Fatalf("SaveAppConfig was called %d times despite forbidden", st.saveN)
+	if st.totalWrites() != 0 {
+		t.Fatalf("store write applied despite forbidden (totalWrites=%d)", st.totalWrites())
 	}
 }
 
@@ -214,8 +288,8 @@ func TestAppConfig_Patch_ValidationFailures(t *testing.T) {
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d want 400, body=%s", rr.Code, rr.Body.String())
 			}
-			if st.saveN != 0 {
-				t.Fatalf("SaveAppConfig was called on a 400")
+			if st.totalWrites() != 0 {
+				t.Fatalf("write was applied on a 400")
 			}
 		})
 	}
@@ -234,10 +308,11 @@ func TestAppConfig_Patch_RotatesSingleField(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 
-	if st.saveN != 1 {
-		t.Fatalf("SaveAppConfig calls=%d want 1", st.saveN)
+	if st.updateWebhookN != 1 || st.updatePEMN != 0 || st.updateClientN != 0 || st.saveN != 0 {
+		t.Fatalf("expected one webhook-secret UPDATE, got webhook=%d pem=%d client=%d save=%d",
+			st.updateWebhookN, st.updatePEMN, st.updateClientN, st.saveN)
 	}
-	saved := st.saved
+	saved := st.snapshot()
 	if saved.WebhookSecret != newSecret {
 		t.Fatalf("WebhookSecret = %q, want %q", saved.WebhookSecret, newSecret)
 	}
@@ -296,8 +371,9 @@ func TestAppConfig_Patch_RotatesMultipleFields(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 
-	if st.saveN != 1 {
-		t.Fatalf("SaveAppConfig calls=%d want 1", st.saveN)
+	if st.updateWebhookN != 1 || st.updatePEMN != 1 || st.updateClientN != 1 || st.saveN != 0 {
+		t.Fatalf("expected one UPDATE per field, got webhook=%d pem=%d client=%d save=%d",
+			st.updateWebhookN, st.updatePEMN, st.updateClientN, st.saveN)
 	}
 	var resp patchResponse
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
@@ -328,8 +404,8 @@ func TestAppConfig_Patch_NoOpForSamePEMWithDifferentLineEndings(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	if st.saveN != 0 {
-		t.Fatalf("SaveAppConfig was called for CRLF-equivalent PEM (calls=%d)", st.saveN)
+	if st.totalWrites() != 0 {
+		t.Fatalf("write was applied for CRLF-equivalent PEM (totalWrites=%d)", st.totalWrites())
 	}
 	var resp patchResponse
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
@@ -350,8 +426,8 @@ func TestAppConfig_Patch_NoOpWhenValueUnchanged(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	if st.saveN != 0 {
-		t.Fatalf("SaveAppConfig was called on no-op rotation (calls=%d)", st.saveN)
+	if st.totalWrites() != 0 {
+		t.Fatalf("write was applied on no-op rotation (totalWrites=%d)", st.totalWrites())
 	}
 	var resp patchResponse
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
@@ -365,7 +441,7 @@ func TestAppConfig_Patch_NoOpWhenValueUnchanged(t *testing.T) {
 func TestAppConfig_Patch_StoreErrorReturns500(t *testing.T) {
 	pemStr := generatePEM(t)
 	st := seededStore(t, pemStr)
-	st.saveErr = errors.New("disk on fire")
+	st.updateErr = errors.New("disk on fire")
 	h := newRotateHandler(&config.Config{AllowAdminEdit: true}, st)
 
 	rr := doPatch(t, h, `{"webhook_secret":"rotated-AAAAAAAAAAAAAAAA"}`, nil)
@@ -391,8 +467,8 @@ func TestAppConfig_Patch_OversizeBodyRejected(t *testing.T) {
 	if rr.Code == http.StatusOK {
 		t.Fatalf("oversize body was accepted (status=200, len=%d)", len(body))
 	}
-	if st.saveN != 0 {
-		t.Fatalf("SaveAppConfig was called on oversize body")
+	if st.totalWrites() != 0 {
+		t.Fatalf("store write applied on oversize body (totalWrites=%d)", st.totalWrites())
 	}
 }
 

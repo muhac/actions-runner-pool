@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/muhac/actions-runner-pool/internal/config"
@@ -163,6 +164,85 @@ func postWebhook(t *testing.T, h http.Handler, body []byte, secret string) int {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	return rr.Code
+}
+
+// TestRotation_ConcurrentDifferentFields_NoLostUpdate is the
+// regression test for the lost-update race in the read-modify-write
+// version of the handler. Two concurrent PATCH requests against the
+// real router + real sqlite, each rotating a different field. After
+// both return, both new values must be persisted — neither rotation
+// is allowed to silently undo the other.
+func TestRotation_ConcurrentDifferentFields_NoLostUpdate(t *testing.T) {
+	originalSecret := "originalAAAAAAAAAAAAAAAA"
+	originalClient := "client-original"
+	pemStr := freshPEM(t)
+
+	st, err := store.OpenSQLite("file:" + t.TempDir() + "/concurrent.db?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.SaveAppConfig(t.Context(), &store.AppConfig{
+		AppID: 1, Slug: "concurrent-test",
+		WebhookSecret: originalSecret, PEM: []byte(pemStr),
+		ClientID: "Iv1.test", ClientSecret: originalClient,
+		BaseURL: "http://127.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{AdminToken: "admintok", AllowAdminEdit: true}
+	h := NewRouter(cfg, st, nil, nil, nil)
+
+	const newSecret = "rotatedAAAAAAAAAAAAAAAAAA"
+	const newClient = "client-rotated"
+
+	doPatch := func(body string) int {
+		req := httptest.NewRequest(http.MethodPatch, "/admin/app-config", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer admintok")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	// Two goroutines, each rotating a different field. Launching them
+	// in parallel and waiting on a barrier maximises the window where
+	// both have read the same pre-rotation snapshot.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		if code := doPatch(`{"webhook_secret":"` + newSecret + `"}`); code != http.StatusOK {
+			t.Errorf("webhook PATCH status=%d want 200", code)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		if code := doPatch(`{"client_secret":"` + newClient + `"}`); code != http.StatusOK {
+			t.Errorf("client PATCH status=%d want 200", code)
+		}
+	}()
+	close(start)
+	wg.Wait()
+
+	got, err := st.GetAppConfig(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WebhookSecret != newSecret {
+		t.Errorf("WebhookSecret = %q, want %q (lost-update on webhook side)", got.WebhookSecret, newSecret)
+	}
+	if got.ClientSecret != newClient {
+		t.Errorf("ClientSecret = %q, want %q (lost-update on client side)", got.ClientSecret, newClient)
+	}
+	// PEM should be untouched.
+	if string(got.PEM) != pemStr {
+		t.Errorf("PEM changed despite neither request touching it")
+	}
 }
 
 func freshPEM(t *testing.T) string {

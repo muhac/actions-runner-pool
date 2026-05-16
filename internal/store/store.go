@@ -6,6 +6,14 @@ import "context"
 type Store interface {
 	SaveAppConfig(ctx context.Context, cfg *AppConfig) error
 	GetAppConfig(ctx context.Context) (*AppConfig, error)
+	// Rotation setters: each updates a single app_config column,
+	// touching only the row id=1 in a single SQL statement so two
+	// concurrent rotations of *different* fields can't lose updates
+	// the way a SaveAppConfig-style read-modify-write would. Returns
+	// store.ErrNoAppConfig if no row exists (operator hasn't run /setup).
+	UpdateAppConfigWebhookSecret(ctx context.Context, secret string) error
+	UpdateAppConfigPEM(ctx context.Context, pem []byte) error
+	UpdateAppConfigClientSecret(ctx context.Context, secret string) error
 
 	UpsertInstallation(ctx context.Context, inst *Installation) error
 	ListInstallations(ctx context.Context) ([]*Installation, error)
