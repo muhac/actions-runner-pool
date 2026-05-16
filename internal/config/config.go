@@ -58,7 +58,15 @@ type Config struct {
 	RunnerLabelSet             map[string]struct{}
 	RunnerDynamicLabelPrefixes []string
 	AllowPublicRepos           bool
-	RepoAllowlist              []string
+	// AllowAdminEdit gates *every* mutating admin endpoint (job
+	// retry/cancel, app_config rotation, etc.). When false (the
+	// default), those endpoints return 403 even if the caller
+	// presents a valid ADMIN_TOKEN — the operator must explicitly
+	// opt in via env to enable writes. Keeping this orthogonal to
+	// ADMIN_TOKEN lets an operator grant read-only API access
+	// without also handing over the ability to mutate state.
+	AllowAdminEdit bool
+	RepoAllowlist  []string
 	// RepoAllowlistSet is the precomputed lower-cased + trimmed set of
 	// public repositories allowed even when AllowPublicRepos is false.
 	RepoAllowlistSet     map[string]struct{}
@@ -136,6 +144,7 @@ func Load() (*Config, error) {
 			os.Getenv("RUNNER_DYNAMIC_LABEL_PREFIXES"),
 		),
 		AllowPublicRepos: envBool("ALLOW_PUBLIC_REPOS"),
+		AllowAdminEdit:   envBool("ALLOW_ADMIN_EDIT"),
 		RepoAllowlist:    parseList(os.Getenv("REPO_ALLOWLIST")),
 		LogLevel:         parseLogLevel(envOr("LOG_LEVEL", "info")),
 	}

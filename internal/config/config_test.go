@@ -480,6 +480,37 @@ func TestLoad_AllowPublicRepos(t *testing.T) {
 	}
 }
 
+func TestLoad_AllowAdminEdit(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want bool
+	}{
+		{"unset-defaults-false", "", false},
+		{"true", "true", true},
+		{"true-case-insensitive", "TRUE", true},
+		{"false", "false", false},
+		{"anything-else-false", "yes", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{"BASE_URL": "https://example.test"}
+			if tc.set != "" {
+				env["ALLOW_ADMIN_EDIT"] = tc.set
+			}
+			withEnv(t, env, func() {
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if c.AllowAdminEdit != tc.want {
+					t.Errorf("AllowAdminEdit = %v, want %v", c.AllowAdminEdit, tc.want)
+				}
+			})
+		})
+	}
+}
+
 func TestLoad_RepoAllowlist(t *testing.T) {
 	withEnv(t, map[string]string{
 		"BASE_URL":       "https://example.test",
