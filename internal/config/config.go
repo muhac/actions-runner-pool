@@ -20,12 +20,14 @@ type Config struct {
 	StoreDSN    string
 	AdminToken  string
 	RunnerImage string
-	// RunnerNamePrefix scopes both the container/runner names the
-	// scheduler generates AND the orphan sweep the reconciler
-	// performs. Default "gharp-". Override to isolate a deployment
-	// from sibling deployments sharing the same docker daemon (e.g.
-	// integration tests setting a unique per-run prefix so the
-	// reconciler doesn't reach into other deployments' containers).
+	// RunnerNamePrefix is the operator-facing leading segment of
+	// runner/container names. Default "gharp-". Sibling-deployment
+	// isolation on a shared docker daemon is handled automatically by
+	// the per-instance id appended to this (see InstanceID and
+	// ContainerNamePrefix), so overriding is only useful for
+	// readability — e.g. naming a deployment "prod-" or "ci-" so
+	// containers are easier to spot in `docker ps`. Empty string fails
+	// startup.
 	RunnerNamePrefix string
 	// InstanceID is a stable per-deployment identifier (persisted in the
 	// store, or overridden via GHARP_INSTANCE_ID). It scopes container
