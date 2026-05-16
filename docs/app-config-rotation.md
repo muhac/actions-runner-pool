@@ -73,6 +73,30 @@ without a restart:
 | `pem` | every JWT mint (scheduler dispatch, reconciler sweeps) |
 | `client_secret` | not read at runtime (used only during the initial OAuth manifest exchange); kept rotatable for completeness and compliance |
 
+### Caveat: installation tokens after PEM rotation
+
+The PEM only signs the App-level JWT; the **installation tokens**
+that JWT mints are issued by GitHub and remain valid until their
+GitHub-side expiry (~1 hour) regardless of which PEM signed the
+mint request. gharp caches installation tokens at
+`internal/github/client.go` to stay under the App's rate limit. After
+a PEM rotation:
+
+- gharp's next JWT mint uses the new PEM automatically (read fresh
+  from the store) — no restart needed.
+- Already-cached installation tokens stay usable until their natural
+  expiry. This is harmless: those tokens were issued legitimately
+  and would have been usable anyway.
+- **If you suspect the old PEM is leaked**, rotating in gharp is
+  *not* sufficient. An attacker holding the leaked PEM can mint
+  fresh JWTs and request installation tokens directly from GitHub
+  without going through gharp at all. The only way to truly stop
+  the leaked PEM from being usable is to **delete it in the GitHub
+  App's settings** (App settings → Private keys → trash icon next
+  to the old key). gharp's rotation endpoint cannot do that for
+  you — GitHub doesn't expose a public API to delete App private
+  keys.
+
 ## Ordering (important for `webhook_secret`)
 
 GitHub signs webhooks with a single secret at a time — when you change
