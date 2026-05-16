@@ -164,8 +164,8 @@ curl -X PATCH "$BASE_URL/admin/app-config" \
 | --- | --- |
 | 200 | Rotation succeeded (or was a no-op). `rotated` lists what actually changed. |
 | 400 | Validation failed (bad PEM, too-short secret, unknown JSON field, empty body, etc.). |
-| 401 | `ADMIN_TOKEN` is set and the bearer was missing or wrong **AND** `ALLOW_ADMIN_EDIT=true`. |
-| 403 | `ALLOW_ADMIN_EDIT` is false. The bearer is not checked — set the flag first. |
+| 401 | `ADMIN_TOKEN` is set and the bearer is missing or wrong. Checked **first**, regardless of `ALLOW_ADMIN_EDIT` — see the "Prerequisites" section above. |
+| 403 | Bearer is valid (or `ADMIN_TOKEN` is unset) **and** `ALLOW_ADMIN_EDIT` is false. Set the flag in gharp's env, then retry. |
 | 409 | No `app_config` row exists. Run `/setup` to bootstrap before rotating. |
 | 413 | Body exceeded 64 KiB. |
 | 415 | `Content-Type` is not `application/json`. |
