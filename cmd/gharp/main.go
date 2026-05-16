@@ -103,7 +103,7 @@ func run() error {
 		}
 	}()
 
-	rec := reconciler.New(st, reconciler.NewExecDocker(), gh, log, cfg.RunnerMaxLifetime, cfg.ContainerNamePrefix, cfg.RunnerWorkdirRoot, cfg.MaintenanceCommand, cfg.MaintenanceInterval)
+	rec := reconciler.New(st, reconciler.NewExecDocker(), gh, log, cfg.RunnerMaxLifetime, cfg.ContainerNamePrefix, cfg.RunnerNamePrefix, cfg.RunnerWorkdirRoot, cfg.MaintenanceCommand, cfg.MaintenanceInterval)
 	go func() {
 		if err := rec.Run(signalCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("reconciler stopped", "err", err)

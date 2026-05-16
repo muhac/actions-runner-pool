@@ -142,9 +142,19 @@ type Reconciler struct {
 	grace               time.Duration
 	maxLifetime         time.Duration
 	containerNamePrefix string
-	workdirRoot         string
-	workdirSweepPeriod  time.Duration
-	workdirGrace        time.Duration
+	// userPrefix is the operator-set RUNNER_NAME_PREFIX without the
+	// per-instance segment — i.e. the broader namespace the deployment
+	// owns. cleanupRunnerWorkdir uses it as a defense-in-depth check
+	// instead of containerNamePrefix so that legacy in-flight rows
+	// from a pre-instance-id binary (whose container names lack the
+	// instance segment) still get their workdirs cleaned during the
+	// upgrade transition. The orphan workdir sweep that walks the
+	// filesystem still scopes to containerNamePrefix — only the
+	// targeted cleanup path widens.
+	userPrefix         string
+	workdirRoot        string
+	workdirSweepPeriod time.Duration
+	workdirGrace       time.Duration
 	// maintenanceCmd and maintenancePeriod drive the optional periodic
 	// user-supplied maintenance command (e.g. docker system prune).
 	// Both must be non-zero to enable the goroutine.
@@ -156,12 +166,18 @@ type Reconciler struct {
 // New creates a new Reconciler with the specified configuration.
 // maxLifetime caps how long a runner can stay active before force-removal.
 // containerNamePrefix scopes the orphan sweep (empty falls back to DefaultContainerNamePrefix).
+// userPrefix is the operator's RUNNER_NAME_PREFIX without the per-instance segment;
+// it's used for the targeted workdir cleanup safety check so legacy in-flight rows
+// from a pre-instance-id binary still get cleaned up. Empty falls back to containerNamePrefix.
 // gh is optional — pass nil to skip GitHub-side ghost-runner sweep.
 // workdirRoot enables filesystem cleanup (empty disables it).
 // maintenanceCmd with maintenancePeriod enables periodic user-supplied maintenance.
-func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, workdirRoot string, maintenanceCmd []string, maintenancePeriod time.Duration) *Reconciler {
+func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime time.Duration, containerNamePrefix, userPrefix, workdirRoot string, maintenanceCmd []string, maintenancePeriod time.Duration) *Reconciler {
 	if containerNamePrefix == "" {
 		containerNamePrefix = DefaultContainerNamePrefix
+	}
+	if userPrefix == "" {
+		userPrefix = containerNamePrefix
 	}
 	workdirRoot = strings.TrimSpace(workdirRoot)
 	return &Reconciler{
@@ -184,6 +200,7 @@ func New(st Store, dk Docker, gh GitHubClient, log *slog.Logger, maxLifetime tim
 		grace:               30 * time.Second,
 		maxLifetime:         maxLifetime,
 		containerNamePrefix: containerNamePrefix,
+		userPrefix:          userPrefix,
 		workdirRoot:         workdirRoot,
 		workdirSweepPeriod:  5 * time.Minute,
 		workdirGrace:        5 * time.Minute,
@@ -387,7 +404,12 @@ func (r *Reconciler) cleanupRunnerWorkdir(containerName string) {
 	if r.workdirRoot == "" {
 		return
 	}
-	if !strings.HasPrefix(containerName, r.containerNamePrefix) {
+	// userPrefix (not containerNamePrefix) so legacy in-flight rows from
+	// a pre-instance-id binary — whose names lack the instance segment —
+	// still get cleaned up during the upgrade transition. Callers only
+	// ever pass names from our own DB rows or our own compound-prefix
+	// filtered docker list, so this remains defense-in-depth.
+	if !strings.HasPrefix(containerName, r.userPrefix) {
 		return
 	}
 	root := filepath.Clean(r.workdirRoot)
