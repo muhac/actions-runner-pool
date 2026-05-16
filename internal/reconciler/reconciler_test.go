@@ -325,6 +325,14 @@ func TestReconcile_OrphanContainer_ForceRemoved(t *testing.T) {
 // deployments share the same operator-set RUNNER_NAME_PREFIX. The
 // instance id embedded in the effective prefix is what keeps them
 // from clobbering each other on a shared docker daemon.
+//
+// Note on fidelity: the real ExecDocker.ListByPrefix filters via
+// `docker ps --filter name=<prefix>` and would never return instance
+// B's container to instance A's sweep in the first place. The
+// fakeDocker here ignores the prefix arg and returns whatever's in
+// prefixList, so this test specifically exercises the reconciler's
+// belt-and-suspenders HasPrefix check at sweepOrphanContainers — the
+// last line of defense if the docker filter ever misbehaves.
 func TestReconcile_OrphanSweep_IgnoresOtherInstancePrefix(t *testing.T) {
 	st := &fakeStore{}
 	dk := &fakeDocker{
