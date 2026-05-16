@@ -8,10 +8,18 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// instanceIDPattern matches docker's accepted container name charset
+// (first char is alnum, rest may include _.- as well). Anchored full
+// match. We splice GHARP_INSTANCE_ID into container names verbatim, so
+// rejecting anything outside this charset at Load() turns an opaque
+// runtime failure into a clear startup error.
+var instanceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
@@ -157,6 +165,13 @@ func Load() (*Config, error) {
 		// container on the host (substring match returns everything).
 		// Refuse rather than nuke unrelated containers.
 		return nil, errors.New("RUNNER_NAME_PREFIX must be non-empty")
+	}
+
+	if c.InstanceID != "" && !instanceIDPattern.MatchString(c.InstanceID) {
+		// We splice this into container names verbatim. Reject up front
+		// rather than wait for `docker run` to fail on the first dispatch
+		// with an opaque "invalid container name" error.
+		return nil, fmt.Errorf("GHARP_INSTANCE_ID %q must match %s (docker container-name charset)", c.InstanceID, instanceIDPattern)
 	}
 
 	if u, err := url.Parse(c.GitHubAPIBase); err != nil || u.Scheme == "" || u.Host == "" {
