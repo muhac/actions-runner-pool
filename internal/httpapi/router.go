@@ -16,7 +16,7 @@ import (
 func NewRouter(cfg *config.Config, st store.Store, gh *github.Client, sch *scheduler.Scheduler, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
-	dashboard := &handlers.DashboardHandler{Log: log}
+	dashboard := &handlers.DashboardHandler{Cfg: cfg, Log: log}
 	mux.HandleFunc("GET /{$}", dashboard.Get)
 
 	mux.Handle("GET /css/", handlers.CSSHandler())

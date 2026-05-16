@@ -197,6 +197,32 @@
       color: #cf222e;
     }
 
+    /* Read-only banner shown when ALLOW_ADMIN_EDIT is false. */
+    .readonly-banner {
+      border-color: #d4c79a;
+      background: #fbf7e2;
+      color: #6b4d00;
+      font-size: 0.85rem;
+    }
+    .readonly-banner code {
+      background: rgba(0,0,0,0.06);
+      padding: 0 0.3rem;
+      border-radius: 0.2rem;
+    }
+
+    /* Rotate-credentials panel. */
+    .rotate-panel summary { font-weight: 600; cursor: pointer; }
+    .rotate-panel .rotate-intro { color: var(--pico-muted-color); font-size: 0.85rem; margin: 0.5rem 0 1rem; }
+    .rotate-panel form { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+    .rotate-panel form > label { font-size: 0.78rem; font-weight: 600; color: var(--pico-muted-color); }
+    .rotate-panel form > input, .rotate-panel form > textarea { margin: 0; font-family: var(--pico-font-family-monospace); }
+    .rotate-panel form > textarea { min-height: 7rem; }
+    .rotate-panel form .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .rotate-panel form .row button { margin: 0; }
+    .rotate-panel form .row .status { font-size: 0.8rem; color: var(--pico-muted-color); }
+    .rotate-panel form .row .status.ok { color: #155b29; }
+    .rotate-panel form .row .status.err { color: #cf222e; }
+
     /* Responsive: collapse stats and toolbar on narrow viewports. */
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -236,6 +262,12 @@
         <button id="clearTokenButton" type="button" class="secondary outline">Clear</button>
       </form>
     </article>
+
+    {{if not .AllowAdminEdit}}
+    <article class="readonly-banner" role="status">
+      Admin writes are disabled. Set <code>ALLOW_ADMIN_EDIT=true</code> in the gharp env to enable retry, cancel, and credential rotation.
+    </article>
+    {{end}}
 
     <article id="errorBanner" class="alert" role="alert" hidden></article>
 
@@ -310,6 +342,45 @@
       </div>
     </article>
 
+    <details class="rotate-panel">
+      <summary>Rotate credentials</summary>
+      <p class="rotate-intro">
+        Rotate on GitHub first (App settings → Webhook secret / Private keys / Client secret),
+        then paste the new value below within a few minutes. GitHub redelivers signature-failed
+        webhooks, so a small window during rotation is safe. Successful rotations show a
+        <code>sha256:</code> fingerprint of the live value so you can confirm without exposing
+        the secret.
+        {{if not .AllowAdminEdit}}<br><strong>Disabled:</strong> set <code>ALLOW_ADMIN_EDIT=true</code> first.{{end}}
+      </p>
+
+      <form id="rotateWebhookForm" data-field="webhook_secret">
+        <label for="rotateWebhookInput">New webhook secret</label>
+        <input id="rotateWebhookInput" type="password" autocomplete="off" placeholder="paste the new webhook secret">
+        <div class="row">
+          <button type="submit"{{if not .AllowAdminEdit}} disabled{{end}}>Rotate webhook secret</button>
+          <span class="status" data-status></span>
+        </div>
+      </form>
+
+      <form id="rotatePEMForm" data-field="pem">
+        <label for="rotatePEMInput">New private key (PEM)</label>
+        <textarea id="rotatePEMInput" autocomplete="off" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+        <div class="row">
+          <button type="submit"{{if not .AllowAdminEdit}} disabled{{end}}>Rotate PEM</button>
+          <span class="status" data-status></span>
+        </div>
+      </form>
+
+      <form id="rotateClientForm" data-field="client_secret">
+        <label for="rotateClientInput">New client secret</label>
+        <input id="rotateClientInput" type="password" autocomplete="off" placeholder="paste the new OAuth client secret">
+        <div class="row">
+          <button type="submit"{{if not .AllowAdminEdit}} disabled{{end}}>Rotate client secret</button>
+          <span class="status" data-status></span>
+        </div>
+      </form>
+    </details>
+
     <article class="jobs-card">
       <div class="jobs-head">
         <span class="jobs-title">Recent jobs</span>
@@ -337,6 +408,10 @@
   <script>
     const tokenKey = "gharp.adminToken";
     const refreshMs = 10000;
+    // Server-rendered so the JS path can mirror the server's
+    // authorization decision and avoid building disabled-looking
+    // controls that would still fire a request.
+    const allowAdminEdit = {{if .AllowAdminEdit}}true{{else}}false{{end}};
     let refreshTimer = null;
     let isLoading = false;
 
@@ -606,6 +681,11 @@
         button.className = variant;
       }
       button.textContent = label;
+      if (!allowAdminEdit) {
+        button.disabled = true;
+        button.title = "Set ALLOW_ADMIN_EDIT=true to enable";
+        return button;
+      }
       button.addEventListener("click", async () => {
         button.disabled = true;
         showError("");
@@ -673,6 +753,57 @@
         refresh();
       }
     });
+
+    // Rotate-credentials forms. Each form submits one field — partial
+    // PATCH means an absent field is left untouched server-side, which
+    // matches the per-field "rotate this and only this" UX.
+    function wireRotateForm(formID, inputID) {
+      const form = document.getElementById(formID);
+      if (!form) return;
+      const input = document.getElementById(inputID);
+      const status = form.querySelector("[data-status]");
+      const button = form.querySelector("button[type=submit]");
+      form.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!allowAdminEdit) return;
+        const value = input.value;
+        if (!value || !value.trim()) {
+          status.textContent = "Enter a value first";
+          status.className = "status err";
+          return;
+        }
+        button.disabled = true;
+        status.textContent = "Rotating…";
+        status.className = "status";
+        try {
+          const body = {};
+          body[form.dataset.field] = value;
+          const res = await apiFetch("/admin/app-config", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const fp = (res && res[form.dataset.field + "_fingerprint"]) || "";
+          if (Array.isArray(res.rotated) && res.rotated.length === 0) {
+            status.textContent = "No change (value matches current)";
+            status.className = "status";
+          } else {
+            status.textContent = "Rotated · " + fp;
+            status.className = "status ok";
+            input.value = "";
+          }
+        } catch (err) {
+          status.textContent = err.message || "rotate failed";
+          status.className = "status err";
+        } finally {
+          button.disabled = !allowAdminEdit;
+        }
+      });
+    }
+
+    wireRotateForm("rotateWebhookForm", "rotateWebhookInput");
+    wireRotateForm("rotatePEMForm", "rotatePEMInput");
+    wireRotateForm("rotateClientForm", "rotateClientInput");
 
     syncClearStatusButton();
     refresh();
