@@ -9,7 +9,7 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 * 🔐 **Self-hosted** — no external service dependency
 * ♻️ **Ephemeral runners** — one job per runner, clean environment every time
 * ⚡ **Autoscaling** — runners are created on-demand from webhook events
-* 📊 **Built-in dashboard** — inspect jobs and runners (with prometheus metrics), and retry/cancel controls
+* 📊 **Built-in dashboard** — inspect jobs and runners (with prometheus metrics), retry/cancel controls, and in-place credential rotation (webhook secret / pem / client secret) gated behind a `ALLOW_ADMIN_EDIT` kill-switch
 * 📦 **Multi-repository, personal-account support** — share compute across repos (not supported natively by GitHub)
 
 > 👉 **[Try the dashboard live](https://muhac.github.io/actions-runner-pool/demo/)** — same UI, mock data, no backend. Click Cancel / Retry to see how the dashboard reacts.
