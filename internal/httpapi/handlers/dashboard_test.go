@@ -67,6 +67,16 @@ func TestDashboard_ReadonlyBannerWhenFlagOff(t *testing.T) {
 	if !strings.Contains(body, `const allowAdminEdit = false`) {
 		t.Fatal("JS allowAdminEdit flag should be false")
 	}
+	// Actions column is suppressed entirely when writes are disabled —
+	// the <th>Actions</th> header should not appear, and renderJobs
+	// will skip the corresponding cell so column counts stay aligned.
+	if strings.Contains(body, "<th>Actions</th>") {
+		t.Fatal("Actions column header should be hidden when writes are disabled")
+	}
+	// And the Admin button picks up the read-only hint attribute.
+	if !strings.Contains(body, `data-readonly="true"`) {
+		t.Fatal("Admin button should be tagged read-only when writes are disabled")
+	}
 }
 
 func TestDashboard_NoBannerWhenFlagOn(t *testing.T) {
@@ -77,6 +87,9 @@ func TestDashboard_NoBannerWhenFlagOn(t *testing.T) {
 	h.Get(rr, req)
 
 	body := rr.Body.String()
+	if !strings.Contains(body, "<th>Actions</th>") {
+		t.Fatal("Actions column header should render when writes are enabled")
+	}
 	if strings.Contains(body, "Admin writes are disabled") {
 		t.Fatal("read-only banner should not render when flag is on")
 	}

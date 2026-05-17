@@ -181,6 +181,10 @@
 
     .row-actions { display: flex; gap: 0.4rem; }
     .row-actions button { margin: 0; padding: 0.25rem 0.65rem; font-size: 0.8rem; min-width: 4.5rem; }
+    /* When the cell has no actionable button (e.g. an in_progress row),
+       the placeholder dash should sit centered rather than left-aligned
+       against the column edge. */
+    .row-actions.empty { justify-content: center; }
 
     /* Auth + alert articles render compactly. */
     .auth-panel form {
@@ -396,7 +400,7 @@
         <table>
           <thead>
             <tr>
-              <th>Actions</th>
+              {{if .AllowAdminEdit}}<th>Actions</th>{{end}}
               <th>Status</th>
               <th>Repo</th>
               <th>Workflow</th>
@@ -569,14 +573,13 @@
 
       for (const job of jobs) {
         const row = document.createElement("tr");
-        row.append(
-          actionsCell(job),
-          cell(statusBadge(job)),
-          repoCell(job),
-          workflowCell(job),
-          runnerCell(job),
-          updatedCell(job.updated_at)
-        );
+        // Actions column is hidden entirely when writes are disabled —
+        // mirrors the conditional <th>Actions</th> in the template so
+        // the column count matches.
+        const cells = allowAdminEdit
+          ? [actionsCell(job), cell(statusBadge(job)), repoCell(job), workflowCell(job), runnerCell(job), updatedCell(job.updated_at)]
+          : [cell(statusBadge(job)), repoCell(job), workflowCell(job), runnerCell(job), updatedCell(job.updated_at)];
+        row.append(...cells);
         el.jobsBody.appendChild(row);
       }
     }
@@ -673,6 +676,7 @@
         wrap.appendChild(actionButton("Cancel", "cancel", job.id, ""));
       }
       if (!wrap.children.length) {
+        wrap.classList.add("empty");
         const span = document.createElement("span");
         span.className = "muted";
         span.textContent = "-";
@@ -683,17 +687,16 @@
     }
 
     function actionButton(label, action, id, variant) {
+      // Caller guarantees allowAdminEdit is true (renderJobs skips the
+      // actions cell entirely otherwise), so we don't need a disabled
+      // fallback path here. The column header is also conditionally
+      // omitted from the template, keeping the column count consistent.
       const button = document.createElement("button");
       button.type = "button";
       if (variant) {
         button.className = variant;
       }
       button.textContent = label;
-      if (!allowAdminEdit) {
-        button.disabled = true;
-        button.title = "Set ALLOW_ADMIN_EDIT=true to enable";
-        return button;
-      }
       button.addEventListener("click", async () => {
         button.disabled = true;
         showError("");
