@@ -217,8 +217,12 @@ or use `sqlite3 .backup` from a sidecar container that has the
 without restarting gharp. See
 [`app-config-rotation.md`](app-config-rotation.md) for the full
 endpoint contract, validation rules, ordering guidance, and curl
-recipes. Both `ADMIN_TOKEN` (set via env) **and** `ALLOW_ADMIN_EDIT=true`
-(also via env) are required before the endpoint accepts writes.
+recipes. The endpoint requires `ALLOW_ADMIN_EDIT=true` in the gharp
+env — without it the endpoint returns `403 Forbidden`. If you also
+set `ADMIN_TOKEN` (strongly recommended for any non-localhost
+deployment) every request must include `Authorization: Bearer <token>`;
+**leaving `ADMIN_TOKEN` empty leaves the endpoint open** to anyone
+who can reach gharp once writes are enabled.
 
 `BASE_URL` and the App-level identity (`app_id`, `slug`) cannot be
 rotated — they are baked into the GitHub App at `/setup` time and
@@ -328,12 +332,18 @@ request must include `Authorization: Bearer <token>`.
 
 **Mutating endpoints** (`POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel`,
 `PATCH /admin/app-config`) additionally require `ALLOW_ADMIN_EDIT=true`
-in gharp's env, regardless of `ADMIN_TOKEN`. The default is `false`,
-which makes the dashboard render those controls disabled and the API
-return `403 Forbidden`. Auth ordering is bearer-first: a missing or
-wrong bearer always returns `401 Unauthorized`, even when the flag
-is off (this is what makes the dashboard's "enter token" prompt fire
-correctly).
+in gharp's env. The default is `false`, which makes the dashboard
+render those controls disabled and the API return `403 Forbidden`.
+
+The flag is a *kill-switch*, not an authenticator: when `ADMIN_TOKEN`
+is unset and `ALLOW_ADMIN_EDIT=true`, the write endpoints are open to
+anyone who can reach gharp. Set `ADMIN_TOKEN` to a strong random
+value for any non-localhost deployment that enables writes.
+
+Auth ordering is bearer-first: when `ADMIN_TOKEN` is set, a missing
+or wrong bearer always returns `401 Unauthorized`, even with the
+flag off (this is what makes the dashboard's "enter token" prompt
+fire correctly).
 
 ```bash
 # Open mode

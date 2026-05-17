@@ -32,8 +32,11 @@ untouched.
   the default `false`, the endpoint returns `403 Forbidden`. This is a
   deliberate kill-switch: an accidentally-leaked `ADMIN_TOKEN` should
   not, on its own, be enough to rotate credentials.
-- **`ADMIN_TOKEN`** must be set (or the endpoint is open — see
-  [configuration.md](./configuration.md)).
+- **`ADMIN_TOKEN`** should be set in gharp's environment for any
+  non-localhost deployment. The flag (`ALLOW_ADMIN_EDIT`) alone does
+  *not* authenticate callers — when `ADMIN_TOKEN` is empty and the
+  flag is on, the endpoint is open to anyone who can reach gharp.
+  See [configuration.md](./configuration.md#auth-ordering).
 - gharp must already be set up (`app_config` row present). The endpoint
   returns `409 Conflict` if you haven't run `/setup` yet.
 
