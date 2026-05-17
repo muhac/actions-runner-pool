@@ -73,7 +73,9 @@ Not flat files. sqlite gives transactions, indexed queries, and proper concurren
 
 Tables (initial cut):
 
-- **`app_config`** — App ID, webhook secret, private key, BASE_URL. One row.
+- **`instance`** — single row (id=1) holding the deployment's auto-generated `uid`. Used to build a per-instance container-name prefix so two gharp deployments sharing a docker daemon don't sweep each other's containers. Override at boot via `GHARP_INSTANCE_ID`.
+- **`app_config`** — App ID, webhook secret, private key, OAuth client id/secret, BASE_URL. One row. Mutable fields (`webhook_secret`, `pem`, `client_secret`) are rotatable in-place via `PATCH /admin/app-config`.
+- **`installation_repos`** — repo full name → installation ID. Populated/cleared by `installation_repositories: added/removed` webhooks.
 - **`installations`** — installation ID, account login, account type, scope.
 - **`jobs`** — workflow_job ID, repo full name, action (queued/in_progress/completed), labels, dedupe key, received_at, status. The status state machine is `pending` → `dispatched` (gharp launched a runner; GitHub hasn't bound it yet) → `in_progress` (real `workflow_job: in_progress` webhook with non-empty `runner_name`) → `completed`. The `dispatched` placeholder lets the scheduler's replay loop rescue jobs whose runner lost the assignment race.
 - **`runners`** — container name, repo full name, runner name, labels, status, started_at, finished_at.

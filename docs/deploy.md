@@ -149,11 +149,17 @@ Push it. On the host, you should see:
 
 ```bash
 docker logs gharp
-# dispatch: runner launched job_id=... container=gharp-...-...
+# dispatch: runner launched job_id=... container=gharp-<instance_id>-<job_id>-<hex>
 
 docker ps
-# ... myoung34/github-runner:latest ... gharp-<job_id>-<hash>
+# ... myoung34/github-runner:latest ... gharp-<instance_id>-<job_id>-<hex>
 ```
+
+The `<instance_id>` segment (6 hex chars by default) is generated on
+first boot and persisted in the `instance` table so two gharp
+deployments sharing a docker daemon don't accidentally sweep each
+other's containers. Override at boot via `GHARP_INSTANCE_ID` if you
+want a stable, human-readable id like `prod` or `ci`.
 
 The runner container should disappear within a few seconds of the job
 finishing in the GitHub UI (it's `--rm` + `EPHEMERAL=1`).
