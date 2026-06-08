@@ -108,6 +108,7 @@ jobs:
     name: Playwright Tests
     runs-on: ubuntu-latest
     needs: [lint, test]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -126,9 +127,22 @@ jobs:
         working-directory: tests
         run: npm ci
 
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}
+
       - name: Install Playwright browsers
         working-directory: tests
-        run: ./node_modules/.bin/playwright install --with-deps chromium
+        timeout-minutes: 10
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            ./node_modules/.bin/playwright install-deps chromium
+          else
+            ./node_modules/.bin/playwright install --with-deps chromium
+          fi
 
       - name: Run Playwright tests
         working-directory: tests
