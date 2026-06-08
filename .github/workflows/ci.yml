@@ -136,13 +136,20 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: tests
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
             ./node_modules/.bin/playwright install-deps chromium
-          else
-            ./node_modules/.bin/playwright install --with-deps chromium
+            exit 0
           fi
+          # cdn.playwright.dev stalls intermittently; retry with a
+          # per-attempt timeout so a hung download fails fast and a fresh
+          # connection can succeed instead of burning the whole step.
+          for i in 1 2 3 4 5; do
+            timeout 180 ./node_modules/.bin/playwright install --with-deps chromium && exit 0
+            echo "::warning::Playwright browser download attempt $i stalled, retrying..."
+          done
+          exit 1
 
       - name: Run Playwright tests
         working-directory: tests
