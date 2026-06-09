@@ -108,6 +108,12 @@ jobs:
     name: Playwright Tests
     runs-on: ubuntu-latest
     needs: [lint, test]
+    timeout-minutes: 15
+    # Browsers come prebaked in the image, pulled from mcr.microsoft.com, so
+    # the run never hits cdn.playwright.dev (which stalled for hours on every
+    # download). Keep the tag in sync with @playwright/test in tests/package.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
     steps:
       - uses: actions/checkout@v6
 
@@ -116,19 +122,9 @@ jobs:
           go-version: stable
           cache: true
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: tests/package-lock.json
-
       - name: Install Node dependencies
         working-directory: tests
         run: npm ci
-
-      - name: Install Playwright browsers
-        working-directory: tests
-        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Run Playwright tests
         working-directory: tests
