@@ -775,7 +775,9 @@ func (r *Reconciler) sweepStaleInProgressJobs(ctx context.Context) {
 			// completion can no longer arrive either, so leaving the
 			// row in_progress would burn a WorkflowJob call every
 			// sweep cycle forever. Treat as terminal/cancelled, same
-			// policy as NotFound.
+			// policy as NotFound. Safe to act on: the client surfaces
+			// rate-limited 403s as plain errors, never AuthFailed, so
+			// a quota blip can't cancel a job that's really running.
 			if _, err := r.store.MarkJobCompleted(ctx, j.ID, "cancelled"); err != nil {
 				r.log.Error("reconciler/github: MarkJobCompleted(cancelled) after AuthFailed failed",
 					"job_id", j.ID, "err", err)

@@ -479,7 +479,9 @@ func newNameFn(prefix string) func(jobID int64) (string, string) {
 
 // confirm404 re-reads the workflow job after a short delay. Returns:
 //   - confirmed=true if the second read also surfaces NotFound or
-//     AuthFailed (cancel the job).
+//     AuthFailed (cancel the job). Rate-limited responses never reach
+//     here as AuthFailed — the client returns them as plain errors,
+//     which fall through to the optimistic path below.
 //   - confirmed=false, aborted=false: any other outcome — back to
 //     queued or transport error — fall through to the optimistic
 //     launch path.

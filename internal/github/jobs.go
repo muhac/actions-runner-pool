@@ -25,7 +25,10 @@ type WorkflowJobStatus struct {
 	// uninstalled and the installation token is no longer valid" —
 	// callers handling 404 confirmation should treat this as a
 	// confirmation that the job is no longer reachable, not as a
-	// transient error to retry past.
+	// transient error to retry past. Rate-limited 403/429 responses
+	// are excluded: those surface as plain errors (transient), since
+	// treating them as terminal would let a quota blip cancel jobs
+	// that are really running.
 	AuthFailed bool
 }
 
@@ -59,6 +62,12 @@ func (c *Client) WorkflowJob(ctx context.Context, installationToken, repoFullNam
 	if resp.StatusCode == http.StatusNotFound {
 		return &WorkflowJobStatus{NotFound: true}, nil
 	}
+	// Must be checked before the 403→AuthFailed mapping: GitHub's
+	// primary and secondary rate limits also answer 403.
+	if isRateLimited(resp) {
+		return nil, fmt.Errorf("workflow job: rate limited (status %d, retry-after %q)",
+			resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &WorkflowJobStatus{AuthFailed: true}, nil
 	}
@@ -76,4 +85,19 @@ func (c *Client) WorkflowJob(ctx context.Context, installationToken, repoFullNam
 		return nil, errors.New("workflow job: empty status in response")
 	}
 	return &WorkflowJobStatus{Status: body.Status, Conclusion: body.Conclusion}, nil
+}
+
+// isRateLimited reports whether a non-2xx response is a GitHub rate
+// limit rather than a real auth/permission failure. Primary limit:
+// 403/429 with x-ratelimit-remaining exhausted. Secondary (abuse)
+// limit: 403/429 with a Retry-After hint.
+// https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+func isRateLimited(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+	if resp.Header.Get("Retry-After") != "" {
+		return true
+	}
+	return resp.Header.Get("X-RateLimit-Remaining") == "0"
 }
