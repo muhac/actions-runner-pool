@@ -675,7 +675,7 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 }
 
 // (3) periodic replay: a 'dispatched' row whose runner never claimed a
-// job becomes eligible after dispatchedReplayAge and gets re-dispatched
+// job becomes eligible after store.DispatchedReplayAge and gets re-dispatched
 // by the periodic ticker (not just startup replay).
 func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
 	st := newStoreT(t)
@@ -684,7 +684,7 @@ func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
 	seedPendingJob(t, st, 1, "owner/repo")
 
 	// Move the job to 'dispatched' and backdate updated_at so it falls
-	// past dispatchedReplayAge — simulates the exact production scenario
+	// past store.DispatchedReplayAge — simulates the exact production scenario
 	// (gharp launched a runner, GitHub gave the runner to a different
 	// job, the row sat in dispatched).
 	if err := st.MarkJobDispatched(context.Background(), 1); err != nil {
@@ -1080,6 +1080,71 @@ func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
 	active, _ := st.ListActiveRunners(context.Background())
 	if len(active) != 1 {
 		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// A duplicate channel copy of a job that was JUST dispatched (cap
+// backoff + periodic replay both Enqueue without dedupe) must not
+// launch a second runner. Unlike the concurrent-same-name test above,
+// production names are unique per attempt, so the container-name PK
+// can't save us here — only the dispatched-age guard can.
+func TestDispatch_FreshlyDispatchedDuplicate_NoSecondLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	var seq atomic.Int64
+	s.nameFn = func(jobID int64) (string, string) {
+		name := "runner-" + itoa(jobID) + "-" + itoa(seq.Add(1))
+		return name, name
+	}
+
+	s.dispatch(context.Background(), 1) // first copy: launches, row -> dispatched
+	s.dispatch(context.Background(), 1) // duplicate copy popped right after
+
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls = %d, want 1 (duplicate copy of fresh dispatched job must be skipped)", got)
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// The dispatched-age guard must not break the rescue path: a
+// 'dispatched' row older than store.DispatchedReplayAge (runner lost
+// the assignment race) is re-dispatched, launching a fresh runner.
+func TestDispatch_StaleDispatched_IsRedispatched(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	var seq atomic.Int64
+	s.nameFn = func(jobID int64) (string, string) {
+		name := "runner-" + itoa(jobID) + "-" + itoa(seq.Add(1))
+		return name, name
+	}
+
+	s.dispatch(context.Background(), 1)
+	if err := st.SetJobUpdatedAt(context.Background(), 1,
+		time.Now().Add(-store.DispatchedReplayAge-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatch(context.Background(), 1)
+
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (stale dispatched row must be rescued)", got)
 	}
 }
 

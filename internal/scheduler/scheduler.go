@@ -126,7 +126,7 @@ func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 		case <-ticker.C:
 			// Periodic rescue: any 'dispatched' row whose runner never
 			// claimed a job (the runner↔job race documented in
-			// architecture.md) becomes eligible after dispatchedReplayAge
+			// architecture.md) becomes eligible after store.DispatchedReplayAge
 			// and gets re-dispatched here. Cheap when nothing is stuck —
 			// PendingJobs returns an empty slice in the steady state.
 			s.replay(runCtx)
@@ -200,6 +200,20 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 	if job.Status != "pending" && job.Status != "dispatched" {
 		s.log.Debug("dispatch: job no longer rescuable, skipping", "job_id", jobID, "status", job.Status)
 		return
+	}
+	// A 'dispatched' row is only re-dispatchable once it's stale enough
+	// to be a rescue candidate — the same threshold PendingJobs applies
+	// in SQL. Without this, a duplicate channel copy (Enqueue doesn't
+	// dedupe: cap backoff and periodic replay both re-enqueue) popped
+	// right after the first copy launched would pass the status check,
+	// see GitHub still reporting 'queued' (the runner is still booting),
+	// and start a second runner that pins a cap slot until the lifetime
+	// sweep clears it.
+	if job.Status == "dispatched" {
+		if age := s.nowFn().Sub(job.UpdatedAt); age < store.DispatchedReplayAge {
+			s.log.Debug("dispatch: dispatched recently, skipping duplicate copy", "job_id", jobID, "age", age)
+			return
+		}
 	}
 
 	// Cap check before any GitHub API call so we never burn rate limit
@@ -288,7 +302,7 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 	switch {
 	case err != nil:
 		// API hiccup: stay conservative and proceed. The 60s reconciler +
-		// dispatchedReplayAge will catch a wasted launch; refusing on
+		// DispatchedReplayAge will catch a wasted launch; refusing on
 		// transient GitHub errors would create a worse failure mode where
 		// real jobs never dispatch.
 		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)

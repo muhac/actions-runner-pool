@@ -317,14 +317,18 @@ func (s *SQLite) GetJob(ctx context.Context, jobID int64) (*Job, error) {
 	return &j, nil
 }
 
-// dispatchedReplayAge bounds how stale a 'dispatched' job can be before
+// DispatchedReplayAge bounds how stale a 'dispatched' job can be before
 // PendingJobs replays it. The dispatch path's normal completion is the
 // real `workflow_job: in_progress` webhook flipping the row to
 // 'in_progress' — typically within seconds. If that never arrives
 // (GitHub assigned the runner to a different job, our process crashed
 // after MarkJobDispatched but before launch acked, etc.), replay rescues
 // the job after this window.
-const dispatchedReplayAge = 5 * time.Minute
+//
+// Exported because the scheduler's dispatch path applies the same
+// threshold: a 'dispatched' row younger than this is a duplicate
+// channel copy, not a rescue candidate.
+const DispatchedReplayAge = 5 * time.Minute
 
 func (s *SQLite) MarkJobDispatched(ctx context.Context, jobID int64) error {
 	// Also refreshes updated_at when the row is already 'dispatched',
@@ -425,8 +429,8 @@ func (s *SQLite) CancelPendingJobsForRepo(ctx context.Context, repoFullName stri
 
 // PendingJobs returns rows still owed dispatch work: anything in
 // 'pending', plus 'dispatched' rows whose updated_at is older than
-// dispatchedReplayAge (the runner we launched never claimed a job —
-// see the dispatchedReplayAge comment).
+// DispatchedReplayAge (the runner we launched never claimed a job —
+// see the DispatchedReplayAge comment).
 func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 	const q = `SELECT id, repo, job_name, run_id, run_attempt, workflow_name, action, labels, dedupe_key, payload_json, status, conclusion,
 		runner_id, runner_name, received_at, updated_at
@@ -434,7 +438,7 @@ func (s *SQLite) PendingJobs(ctx context.Context) ([]*Job, error) {
 		WHERE status='pending'
 		   OR (status='dispatched' AND updated_at < datetime('now', ?))
 		ORDER BY received_at, id`
-	rows, err := s.db.QueryContext(ctx, q, fmt.Sprintf("-%d seconds", int(dispatchedReplayAge.Seconds())))
+	rows, err := s.db.QueryContext(ctx, q, fmt.Sprintf("-%d seconds", int(DispatchedReplayAge.Seconds())))
 	if err != nil {
 		return nil, err
 	}
