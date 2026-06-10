@@ -126,6 +126,22 @@ jobs:
         working-directory: tests
         run: npm ci
 
+      # The prebaked browser lives at the path the installed @playwright/test
+      # expects only when the image tag matches the package version. Check it
+      # locally (no network) so a tag/package drift fails fast here with a clear
+      # message, instead of the test step trying to reach cdn.playwright.dev.
+      - name: Verify Playwright browsers match the image
+        working-directory: tests
+        run: |
+          exe=$(node -e "console.log(require('playwright-core').chromium.executablePath())")
+          if [ ! -x "$exe" ]; then
+            ver=$(node -p "require('@playwright/test/package.json').version")
+            echo "::error::Chromium for @playwright/test $ver is missing at $exe."
+            echo "::error::The container image tag in .github/workflows/ci.yml is out of sync with tests/package.json — bump mcr.microsoft.com/playwright to v$ver-noble and retry."
+            exit 1
+          fi
+          echo "Chromium present: $exe"
+
       - name: Run Playwright tests
         working-directory: tests
         run: npm test
