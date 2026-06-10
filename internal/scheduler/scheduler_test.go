@@ -1143,6 +1143,49 @@ func TestDispatch_StaleDispatched_IsRedispatched(t *testing.T) {
 	if got := ln.calls.Load(); got != 2 {
 		t.Fatalf("Launch calls = %d, want 2 (stale dispatched row must be rescued)", got)
 	}
+
+	// The rescue refreshed updated_at (MarkJobDispatched), so the guard
+	// must re-arm: an immediate duplicate copy is skipped again.
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (guard must re-arm after rescue resets the window)", got)
+	}
+}
+
+// The guard's exact boundary leans toward rescue: age strictly under
+// store.DispatchedReplayAge is skipped as a duplicate, age equal to it
+// is allowed through. Pinned with an injected clock so the test is
+// deterministic.
+func TestDispatch_DispatchedAgeBoundary(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.nameFn = uniqueNameFn()
+
+	s.dispatch(context.Background(), 1) // row -> dispatched
+	// SetJobUpdatedAt stores second precision, so anchor on a truncated
+	// base to keep the age arithmetic exact.
+	base := time.Now().UTC().Truncate(time.Second)
+	if err := st.SetJobUpdatedAt(context.Background(), 1, base); err != nil {
+		t.Fatal(err)
+	}
+
+	s.nowFn = func() time.Time { return base.Add(store.DispatchedReplayAge - time.Second) }
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls = %d, want 1 (age just under threshold is a duplicate)", got)
+	}
+
+	s.nowFn = func() time.Time { return base.Add(store.DispatchedReplayAge) }
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (age at exact threshold is rescuable)", got)
+	}
 }
 
 // --- pre-launch GitHub WorkflowJob check ------------------------------------
