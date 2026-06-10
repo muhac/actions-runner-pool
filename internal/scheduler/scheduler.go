@@ -126,7 +126,7 @@ func (s *Scheduler) RunWithDrain(runCtx, drainCtx context.Context) error {
 		case <-ticker.C:
 			// Periodic rescue: any 'dispatched' row whose runner never
 			// claimed a job (the runner↔job race documented in
-			// architecture.md) becomes eligible after dispatchedReplayAge
+			// architecture.md) becomes eligible after store.DispatchedReplayAge
 			// and gets re-dispatched here. Cheap when nothing is stuck —
 			// PendingJobs returns an empty slice in the steady state.
 			s.replay(runCtx)
@@ -200,6 +200,25 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 	if job.Status != "pending" && job.Status != "dispatched" {
 		s.log.Debug("dispatch: job no longer rescuable, skipping", "job_id", jobID, "status", job.Status)
 		return
+	}
+	// A 'dispatched' row is only re-dispatchable once it's stale enough
+	// to be a rescue candidate — the same threshold PendingJobs applies
+	// in SQL, though marginally laxer at the exact boundary (age ==
+	// threshold passes here; SQL requires strictly older — both lean
+	// toward allowing a rescue). Without this, a duplicate channel copy
+	// (Enqueue doesn't dedupe: cap backoff and periodic replay both
+	// re-enqueue) popped right after the first copy launched would pass
+	// the status check, see GitHub still reporting 'queued' (the runner
+	// is still booting), and start a second runner that pins a cap slot
+	// until the lifetime sweep clears it. Trade-off: a skipped duplicate
+	// no longer reaches the pre-launch truth check, so a row whose
+	// terminal webhook was lost converges via the replay loop, up to
+	// store.DispatchedReplayAge later — not a stuck row, just slower.
+	if job.Status == "dispatched" {
+		if age := s.nowFn().Sub(job.UpdatedAt); age < store.DispatchedReplayAge {
+			s.log.Debug("dispatch: dispatched recently, skipping duplicate copy", "job_id", jobID, "age", age)
+			return
+		}
 	}
 
 	// Cap check before any GitHub API call so we never burn rate limit
@@ -288,7 +307,7 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 	switch {
 	case err != nil:
 		// API hiccup: stay conservative and proceed. The 60s reconciler +
-		// dispatchedReplayAge will catch a wasted launch; refusing on
+		// DispatchedReplayAge will catch a wasted launch; refusing on
 		// transient GitHub errors would create a worse failure mode where
 		// real jobs never dispatch.
 		s.log.Warn("dispatch: WorkflowJob check failed; proceeding optimistically", "job_id", jobID, "err", err)
@@ -386,6 +405,12 @@ func (s *Scheduler) dispatchWithContext(runCtx, drainCtx context.Context, jobID 
 	// race with the webhook's `workflow_job: in_progress` (which would
 	// already have written the real runner binding).
 	if err := s.store.MarkJobDispatched(drainCtx, jobID); err != nil {
+		// Known residual window: the row stays 'pending', so the
+		// dispatched-age guard above can't stop a queued duplicate copy
+		// from double-launching. Accepted as-is — a store write failing
+		// right after a successful launch is rare, the cost is one
+		// wasted runner bounded by the lifetime sweep, and a retry here
+		// wouldn't cover the crash-between-Launch-and-Mark case anyway.
 		s.log.Error("dispatch: MarkJobDispatched after launch failed", "job_id", jobID, "err", err)
 	}
 	s.log.Info("dispatch: runner launched", "job_id", jobID, "container", containerName, "runner_name", runnerName)

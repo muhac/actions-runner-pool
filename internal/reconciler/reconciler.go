@@ -10,7 +10,7 @@
 //  1. Ghost runner: row in ('starting','idle','busy') but `docker
 //     inspect` reports the container is gone. Mark the row 'finished'.
 //     The dispatched job tied to that runner is left for the scheduler's
-//     existing dispatchedReplayAge replay to rescue.
+//     existing store.DispatchedReplayAge replay to rescue.
 //
 //  2. Orphan container: a container whose name matches our prefix
 //     exists (any state), but no active runner row claims it. Force-remove it.
@@ -314,7 +314,7 @@ func (r *Reconciler) sweepGhostRunners(ctx context.Context) (alive map[string]st
 		if !exists {
 			// Ghost: container vanished. Free the cap slot. The
 			// dispatched job (if any) is left for scheduler.replay to
-			// rescue after dispatchedReplayAge.
+			// rescue after store.DispatchedReplayAge.
 			if err := r.store.UpdateRunnerStatus(ctx, row.ContainerName, "finished"); err != nil {
 				r.log.Error("reconciler: UpdateRunnerStatus(finished) failed", "container", row.ContainerName, "err", err)
 				continue

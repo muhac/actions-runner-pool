@@ -367,8 +367,7 @@ func TestPendingJobs_ReplaysStaleDispatched(t *testing.T) {
 	if err := s.MarkJobDispatched(ctx, 3); err != nil {
 		t.Fatal(err)
 	}
-	stale := time.Now().Add(-1 * time.Hour)
-	if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET updated_at=? WHERE id=3`, stale); err != nil {
+	if err := s.SetJobUpdatedAt(ctx, 3, time.Now().Add(-1*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	// in_progress: NOT included.

@@ -236,6 +236,18 @@ func seedPendingJob(t *testing.T, st store.Store, jobID int64, repo string) {
 	}
 }
 
+// uniqueNameFn returns a nameFn yielding a distinct "test-runner-N"
+// per call — mirrors production's random-suffix names for tests where
+// the same job (or several jobs) dispatch more than once, so
+// InsertRunner doesn't PK-conflict on container_name.
+func uniqueNameFn() func(jobID int64) (string, string) {
+	var seq atomic.Int64
+	return func(jobID int64) (string, string) {
+		name := "test-runner-" + itoa(seq.Add(1))
+		return name, name
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"
@@ -646,14 +658,7 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(8), st, gh, ln)
-	// Make container/runner names unique per call so InsertRunner doesn't
-	// PK-conflict between the two dispatches.
-	var nameCounter atomic.Int64
-	s.nameFn = func(jobID int64) (string, string) {
-		n := nameCounter.Add(1)
-		name := "test-runner-" + itoa(n)
-		return name, name
-	}
+	s.nameFn = uniqueNameFn()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -675,7 +680,7 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 }
 
 // (3) periodic replay: a 'dispatched' row whose runner never claimed a
-// job becomes eligible after dispatchedReplayAge and gets re-dispatched
+// job becomes eligible after store.DispatchedReplayAge and gets re-dispatched
 // by the periodic ticker (not just startup replay).
 func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
 	st := newStoreT(t)
@@ -684,7 +689,7 @@ func TestRun_PeriodicReplay_RescuesStaleDispatched(t *testing.T) {
 	seedPendingJob(t, st, 1, "owner/repo")
 
 	// Move the job to 'dispatched' and backdate updated_at so it falls
-	// past dispatchedReplayAge — simulates the exact production scenario
+	// past store.DispatchedReplayAge — simulates the exact production scenario
 	// (gharp launched a runner, GitHub gave the runner to a different
 	// job, the row sat in dispatched).
 	if err := st.MarkJobDispatched(context.Background(), 1); err != nil {
@@ -1080,6 +1085,106 @@ func TestDispatch_ConcurrentSameJobID_AtMostOneLaunch(t *testing.T) {
 	active, _ := st.ListActiveRunners(context.Background())
 	if len(active) != 1 {
 		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// A duplicate channel copy of a job that was JUST dispatched (cap
+// backoff + periodic replay both Enqueue without dedupe) must not
+// launch a second runner. Unlike the concurrent-same-name test above,
+// production names are unique per attempt, so the container-name PK
+// can't save us here — only the dispatched-age guard can.
+func TestDispatch_FreshlyDispatchedDuplicate_NoSecondLaunch(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.nameFn = uniqueNameFn()
+
+	s.dispatch(context.Background(), 1) // first copy: launches, row -> dispatched
+	s.dispatch(context.Background(), 1) // duplicate copy popped right after
+
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls = %d, want 1 (duplicate copy of fresh dispatched job must be skipped)", got)
+	}
+	active, err := st.ListActiveRunners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active runners = %d, want 1", len(active))
+	}
+}
+
+// The dispatched-age guard must not break the rescue path: a
+// 'dispatched' row older than store.DispatchedReplayAge (runner lost
+// the assignment race) is re-dispatched, launching a fresh runner.
+func TestDispatch_StaleDispatched_IsRedispatched(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.nameFn = uniqueNameFn()
+
+	s.dispatch(context.Background(), 1)
+	if err := st.SetJobUpdatedAt(context.Background(), 1,
+		time.Now().Add(-store.DispatchedReplayAge-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatch(context.Background(), 1)
+
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (stale dispatched row must be rescued)", got)
+	}
+
+	// The rescue refreshed updated_at (MarkJobDispatched), so the guard
+	// must re-arm: an immediate duplicate copy is skipped again.
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (guard must re-arm after rescue resets the window)", got)
+	}
+}
+
+// The guard's exact boundary leans toward rescue: age strictly under
+// store.DispatchedReplayAge is skipped as a duplicate, age equal to it
+// is allowed through. Pinned with an injected clock so the test is
+// deterministic.
+func TestDispatch_DispatchedAgeBoundary(t *testing.T) {
+	st := newStoreT(t)
+	seedAppConfig(t, st)
+	seedInstallation(t, st, 999, "owner/repo")
+	seedPendingJob(t, st, 1, "owner/repo")
+
+	gh := &spyGH{}
+	ln := &spyLauncher{}
+	s := newTestScheduler(t, newCfg(8), st, gh, ln)
+	s.nameFn = uniqueNameFn()
+
+	s.dispatch(context.Background(), 1) // row -> dispatched
+	// SetJobUpdatedAt stores second precision, so anchor on a truncated
+	// base to keep the age arithmetic exact.
+	base := time.Now().UTC().Truncate(time.Second)
+	if err := st.SetJobUpdatedAt(context.Background(), 1, base); err != nil {
+		t.Fatal(err)
+	}
+
+	s.nowFn = func() time.Time { return base.Add(store.DispatchedReplayAge - time.Second) }
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 1 {
+		t.Fatalf("Launch calls = %d, want 1 (age just under threshold is a duplicate)", got)
+	}
+
+	s.nowFn = func() time.Time { return base.Add(store.DispatchedReplayAge) }
+	s.dispatch(context.Background(), 1)
+	if got := ln.calls.Load(); got != 2 {
+		t.Fatalf("Launch calls = %d, want 2 (age at exact threshold is rescuable)", got)
 	}
 }
 

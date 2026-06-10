@@ -237,7 +237,9 @@ This means:
 | `in_progress` | if `runner_name == ""`, **drop the event** (a dispatch race we lost — see below); otherwise `UPDATE jobs SET status='in_progress', runner_id=?, runner_name=?` (only if currently `pending`/`dispatched`) and `UPDATE runners SET status='busy'` | first time we know which runner won the job; lets us reconcile our `runners` table with reality |
 | `completed` | `UPDATE jobs SET status='completed', conclusion=?` and `UPDATE runners SET status='finished', finished_at=?`. Container is already `--rm`-ing itself. | bookkeeping; no new docker action |
 
-The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched`, and the scheduler's periodic replay (every `replayPeriod`, default 1 min) re-dispatches it once `updated_at` falls past `dispatchedReplayAge` (5 min).
+The `runner_name == ""` skip exists because GitHub sometimes fires `in_progress` for a job that gharp's launched runner *did not* claim (e.g., a different runner won the assignment, or the binding hadn't been written when GitHub generated the event). Without the skip, the row would advance to `in_progress` with an empty binding, completed by no one, and the replay loop couldn't rescue it. With the skip, the row stays `dispatched`, and the scheduler's periodic replay (every `replayPeriod`, default 1 min) re-dispatches it once `updated_at` falls past `store.DispatchedReplayAge` (5 min).
+
+The same threshold is enforced inside dispatch itself, not just in the replay query. Channel copies are not deduped — the cap-backoff re-enqueue and the periodic replay both `Enqueue` without checking what's already queued — so a duplicate copy of a job whose first copy just launched can be popped while GitHub still reports the job `queued` (the runner is still booting). Dispatch therefore skips any `dispatched` row younger than `store.DispatchedReplayAge`: it's a duplicate copy, not a rescue candidate. Without the guard, such a copy would launch a second runner that pins a cap slot until the lifetime sweep. Trade-off: a skipped duplicate no longer reaches the pre-launch truth check, so a row whose terminal webhook was lost converges via the replay loop, up to `store.DispatchedReplayAge` later.
 
 The companion guard on the `in_progress` writer: `MarkJobInProgress` now reports whether it actually advanced a row, and the webhook only flips the runner to `busy` when it did. A late `in_progress` arriving after `completed` therefore can no longer resurrect a finished runner.
 
@@ -288,7 +290,7 @@ every 5min (only if a GitHubClient is wired):
                 DELETE /repos/{repo}/actions/runners/{id}
 ```
 
-The dispatched job tied to a cleared runner is left for the scheduler's existing `dispatchedReplayAge` (5 min) replay to rescue — no direct coupling between the reconciler and the jobs table.
+The dispatched job tied to a cleared runner is left for the scheduler's existing `store.DispatchedReplayAge` (5 min) replay to rescue — no direct coupling between the reconciler and the jobs table.
 
 **Out of scope for this pass** (deferred to later v1.x):
 - GitHub-driven idle reaping (querying `GET /repos/{owner}/{repo}/actions/runners` for `online + busy=false + age > IDLE_TIMEOUT`). The local lifetime sweep above is the cheaper substitute: it doesn't distinguish "online idle" from "stuck busy," but it bounds cap-slot occupation either way without burning a GitHub API call per tick. If a future operator needs precise idle detection (e.g. to free slots faster than the lifetime cap allows), this is the seam to fill in.

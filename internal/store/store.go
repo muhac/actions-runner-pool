@@ -33,7 +33,9 @@ type Store interface {
 	// distinct intermediate state meaning "we've launched a runner but
 	// don't yet know if GitHub will assign this job to it." The webhook
 	// promotes 'dispatched' → 'in_progress' once GitHub binds a real
-	// runner. Conditional on status='pending' so it cannot overwrite a
+	// runner. Conditional on status IN ('pending','dispatched') — the
+	// 'dispatched' case refreshes updated_at so a replay re-dispatch
+	// resets its DispatchedReplayAge window — so it cannot overwrite a
 	// real binding written by a concurrent in_progress webhook.
 	MarkJobDispatched(ctx context.Context, jobID int64) error
 	// MarkJobInProgress writes the real runner binding from a
@@ -74,7 +76,11 @@ type Store interface {
 	Summary(ctx context.Context) (*Summary, error)
 	// PendingJobs returns rows still owed dispatch work — both 'pending'
 	// rows and stale 'dispatched' rows whose runner never claimed a job
-	// (the runner↔job race documented in architecture.md).
+	// (the runner↔job race documented in architecture.md). "Stale" is
+	// part of the contract: a 'dispatched' row qualifies only once its
+	// updated_at is older than DispatchedReplayAge. Implementations must
+	// use that same constant — the scheduler's dispatch path applies it
+	// as the duplicate-copy guard and assumes the two sides agree.
 	PendingJobs(ctx context.Context) ([]*Job, error)
 
 	InsertRunner(ctx context.Context, r *Runner) error
