@@ -236,6 +236,18 @@ func seedPendingJob(t *testing.T, st store.Store, jobID int64, repo string) {
 	}
 }
 
+// uniqueNameFn returns a nameFn yielding a distinct "test-runner-N"
+// per call — mirrors production's random-suffix names for tests where
+// the same job (or several jobs) dispatch more than once, so
+// InsertRunner doesn't PK-conflict on container_name.
+func uniqueNameFn() func(jobID int64) (string, string) {
+	var seq atomic.Int64
+	return func(jobID int64) (string, string) {
+		name := "test-runner-" + itoa(seq.Add(1))
+		return name, name
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"
@@ -646,14 +658,7 @@ func TestRun_DispatchesEnqueuedAfterReplay(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(8), st, gh, ln)
-	// Make container/runner names unique per call so InsertRunner doesn't
-	// PK-conflict between the two dispatches.
-	var nameCounter atomic.Int64
-	s.nameFn = func(jobID int64) (string, string) {
-		n := nameCounter.Add(1)
-		name := "test-runner-" + itoa(n)
-		return name, name
-	}
+	s.nameFn = uniqueNameFn()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -1097,11 +1102,7 @@ func TestDispatch_FreshlyDispatchedDuplicate_NoSecondLaunch(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(8), st, gh, ln)
-	var seq atomic.Int64
-	s.nameFn = func(jobID int64) (string, string) {
-		name := "runner-" + itoa(jobID) + "-" + itoa(seq.Add(1))
-		return name, name
-	}
+	s.nameFn = uniqueNameFn()
 
 	s.dispatch(context.Background(), 1) // first copy: launches, row -> dispatched
 	s.dispatch(context.Background(), 1) // duplicate copy popped right after
@@ -1130,11 +1131,7 @@ func TestDispatch_StaleDispatched_IsRedispatched(t *testing.T) {
 	gh := &spyGH{}
 	ln := &spyLauncher{}
 	s := newTestScheduler(t, newCfg(8), st, gh, ln)
-	var seq atomic.Int64
-	s.nameFn = func(jobID int64) (string, string) {
-		name := "runner-" + itoa(jobID) + "-" + itoa(seq.Add(1))
-		return name, name
-	}
+	s.nameFn = uniqueNameFn()
 
 	s.dispatch(context.Background(), 1)
 	if err := st.SetJobUpdatedAt(context.Background(), 1,
