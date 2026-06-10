@@ -126,6 +126,11 @@ func TestWorkflowJob_RateLimited_IsErrorNotAuthFailed(t *testing.T) {
 	}{
 		{"primary_403_remaining_zero", http.StatusForbidden,
 			map[string]string{"X-RateLimit-Remaining": "0"}},
+		// GitHub is migrating primary-limit responses from 403 to 429;
+		// pin the 429-without-Retry-After shape so a refactor can't
+		// silently narrow the check back to 403.
+		{"primary_429_remaining_zero", http.StatusTooManyRequests,
+			map[string]string{"X-RateLimit-Remaining": "0"}},
 		{"secondary_403_retry_after", http.StatusForbidden,
 			map[string]string{"Retry-After": "60"}},
 		{"secondary_429_retry_after", http.StatusTooManyRequests,
