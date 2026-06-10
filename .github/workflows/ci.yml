@@ -138,7 +138,7 @@ jobs:
             echo "Chromium present: $exe"
           else
             echo "::error::Chromium for @playwright/test $ver is missing (resolved: ${exe:-<unresolved>})."
-            echo "::error::The container image tag in .github/workflows/ci.yml is out of sync with tests/package.json — bump mcr.microsoft.com/playwright to v$ver-noble and retry."
+            echo "::error::The mcr.microsoft.com/playwright image tag is out of sync with tests/package.json — bump it to v$ver-noble and retry."
             exit 1
           fi
 
