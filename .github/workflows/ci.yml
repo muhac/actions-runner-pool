@@ -133,14 +133,14 @@ jobs:
       - name: Verify Playwright browsers match the image
         working-directory: tests
         run: |
-          exe=$(node -e "console.log(require('playwright-core').chromium.executablePath())")
-          if [ ! -x "$exe" ]; then
-            ver=$(node -p "require('@playwright/test/package.json').version")
-            echo "::error::Chromium for @playwright/test $ver is missing at $exe."
+          ver=$(node -p "require('@playwright/test/package.json').version")
+          if exe=$(node -e "console.log(require('playwright-core').chromium.executablePath())") && [ -x "$exe" ]; then
+            echo "Chromium present: $exe"
+          else
+            echo "::error::Chromium for @playwright/test $ver is missing (resolved: ${exe:-<unresolved>})."
             echo "::error::The container image tag in .github/workflows/ci.yml is out of sync with tests/package.json — bump mcr.microsoft.com/playwright to v$ver-noble and retry."
             exit 1
           fi
-          echo "Chromium present: $exe"
 
       - name: Run Playwright tests
         working-directory: tests
