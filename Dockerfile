@@ -6,7 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gharp ./cmd/gharp
 
 FROM alpine:3.23
-RUN apk add --no-cache ca-certificates docker-cli
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates docker-cli
 COPY --from=build /out/gharp /usr/local/bin/gharp
 EXPOSE 8080
 # Persist sqlite under /data by default; mount a volume there to survive restarts.
