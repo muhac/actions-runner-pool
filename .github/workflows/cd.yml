@@ -57,6 +57,10 @@ jobs:
           tags: local/${{ github.event.repository.name }}:trivy-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Never cache the runtime stage: its `apk upgrade` layer must run
+          # fresh so new Alpine security patches are picked up (a cached layer
+          # keeps shipping old packages and fails the Trivy scan).
+          no-cache-filters: runtime
 
       - name: Trivy scan image
         uses: aquasecurity/trivy-action@v0.36.0
@@ -76,3 +80,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          no-cache-filters: runtime
