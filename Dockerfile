@@ -1,11 +1,11 @@
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gharp ./cmd/gharp
 
-FROM alpine:3.24
+FROM alpine:3.24 AS runtime
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates docker-cli
 COPY --from=build /out/gharp /usr/local/bin/gharp
 EXPOSE 8080
