@@ -7,6 +7,6 @@
     "test:headed": "./node_modules/.bin/playwright test --headed"
   },
   "devDependencies": {
-    "@playwright/test": "^1.52.0"
+    "@playwright/test": "^1.64.1"
   }
 }
