@@ -28,7 +28,6 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
-    // Cold Go build caches (e.g. Dependabot runs) must compile sqlite from scratch.
     timeout: 180000,
   },
 });
