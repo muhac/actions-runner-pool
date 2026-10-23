@@ -18,7 +18,10 @@ A self-hosted, Docker-based pool of ephemeral GitHub Actions runners.
 
 ### 1. Run gharp
 
-Pre-built multi-arch image: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp).
+Pre-built multi-arch image, published to both registries:
+
+- Docker Hub: [`muhac/gharp`](https://hub.docker.com/r/muhac/gharp)
+- GitHub Container Registry: [`ghcr.io/muhac/actions-runner-pool`](https://github.com/muhac/actions-runner-pool/pkgs/container/actions-runner-pool)
 
 **Minimal `docker run`**
 
