@@ -25,9 +25,11 @@ For the full env-variable reference, see [configuration.md](configuration.md).
 ## 1. Get the code (or skip — use the published image)
 
 The fastest path is the pre-built multi-arch image
-[`muhac/gharp`](https://hub.docker.com/r/muhac/gharp) on Docker Hub or
-[`ghcr.io/muhac/gharp`](https://github.com/muhac/actions-runner-pool/pkgs/container/gharp)
-on GitHub Container Registry, shown in the README quick-start. Use that if you don't need to modify the code.
+[`ghcr.io/muhac/gharp`](https://github.com/muhac/actions-runner-pool/pkgs/container/gharp),
+shown in the README quick-start. Use that if you don't need to modify the code.
+
+> **Note:** The Docker Hub image `muhac/gharp` is no longer updated as of
+> v1.3.3. Switch to `ghcr.io/muhac/gharp` (same tags).
 
 To run from source (custom image, local development, or a fork):
 
