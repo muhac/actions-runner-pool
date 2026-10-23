@@ -44,9 +44,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # GHCR image names must be lowercase, but github.repository may not be.
+      # GHCR image names must be lowercase, but repository_owner may not be.
       - name: Compute GHCR image name
-        run: echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+        run: echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/gharp" >> "$GITHUB_ENV"
 
       - name: Extract metadata
         id: meta
