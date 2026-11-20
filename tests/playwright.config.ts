@@ -17,7 +17,8 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      // Installed Chrome: no browser download, nothing to keep in sync with @playwright/test.
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
     },
   ],
 
