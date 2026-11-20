@@ -17,7 +17,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      // Use the installed Google Chrome instead of Playwright's own Chromium
+      // build, so there is no browser to download or keep in sync with the
+      // @playwright/test version. Needs Chrome on the machine running the tests.
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
     },
   ],
 
