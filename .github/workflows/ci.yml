@@ -109,10 +109,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test]
     timeout-minutes: 15
-    # Runs on the Google Chrome that ships with GitHub-hosted runners (see
-    # `channel` in tests/playwright.config.ts). Nothing is downloaded from
-    # cdn.playwright.dev (which stalled for hours), and there is no browser
-    # build to keep in sync when Dependabot bumps @playwright/test.
     steps:
       - uses: actions/checkout@v7
 
@@ -131,8 +127,6 @@ jobs:
         working-directory: tests
         run: npm ci
 
-      # Fail here with a clear message if the runner image has no Chrome
-      # (for example a self-hosted runner), instead of deep inside the tests.
       - name: Check Chrome is installed
         run: google-chrome --version
 
